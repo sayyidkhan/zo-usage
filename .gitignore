@@ -1,0 +1,6 @@
+# Generated screenshots and local runtime output
+--full-page
+*.log
+
+# Editor and operating-system files
+.DS_Store
