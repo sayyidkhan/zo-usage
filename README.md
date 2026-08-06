@@ -11,6 +11,7 @@ It is intentionally a small, dependency-free Bun server rather than a general-pu
 - **Memory:** Activity Monitor-style pressure, physical/used/available memory, file cache, shared memory, swap, process resident memory, and thread counts.
 - **Disk:** root-volume capacity plus per-process read/write rates and cumulative process I/O.
 - **Network:** interface-wide transfer and packet rates, total traffic, open/listening sockets, and socket ownership by application.
+- **History:** durable interface-wide bandwidth totals for today, this month, and the last 30 days, with a daily record retained for one year.
 - **Attribution:** familiar application names such as OpenClaw, Zo Drive, ZoTube, Zo Moments, ZoMinAI Runtime, Codex, Zo Browser, and Zo Router instead of unexplained `bun` or `node` processes.
 
 The page is designed for a single desktop viewport: the application page does not scroll, while process tables have their own scroll area and sticky headers.
@@ -21,7 +22,7 @@ The page is designed for a single desktop viewport: the application page does no
 Browser
   -> private-apps gateway at /usage/
   -> zo-usage on 127.0.0.1:8791
-  -> /proc, /sys/fs/cgroup, df, and ss
+  -> /proc, /sys/fs/cgroup, df, ss, and local SQLite history
 ```
 
 ## Project Layout
@@ -30,6 +31,7 @@ Browser
 backend/
   server.ts                  # Metrics collector, API, and static asset delivery
   application-manifest.json  # Shared Zo service-name labels
+  data/                      # Generated local SQLite bandwidth history (ignored by Git)
 frontend/
   index.html                 # Dashboard structure
   styles.css                 # Dashboard styles
@@ -49,7 +51,7 @@ The dashboard is mounted at a path rather than the domain root. `APP_BASE_PATH` 
 - Permission to inspect processes and sockets. Running it as the same privileged account that runs Zo services gives the best attribution.
 - A reverse proxy if the dashboard should be accessed outside the local machine.
 
-No npm packages, database, build step, or external telemetry account are required.
+No npm packages, build step, or external telemetry account are required. Bun's built-in SQLite stores the small local bandwidth history.
 
 ## Local Run
 
@@ -110,7 +112,13 @@ Check the local data endpoint first:
 curl --fail http://127.0.0.1:8791/usage/api/snapshot
 ```
 
-It should return JSON with `cpu`, `memory`, `disk`, `network`, `processes`, and `connections`. Then open the routed `/usage/` URL and confirm all four tabs load. If the API works locally but the browser does not, inspect the private-router route prefix and restart `private-apps`.
+It should return JSON with `cpu`, `memory`, `disk`, `network`, `processes`, and `connections`. Check retained bandwidth data separately:
+
+```bash
+curl --fail http://127.0.0.1:8791/usage/api/history
+```
+
+Then open the routed `/usage/` URL and confirm all five tabs load. If the API works locally but the browser does not, inspect the private-router route prefix and restart `private-apps`.
 
 ## Environment Variables
 
@@ -119,6 +127,7 @@ It should return JSON with `cpu`, `memory`, `disk`, `network`, `processes`, and 
 | `PORT` | `8791` | Loopback port used by the Bun server. |
 | `APP_BASE_PATH` | `/usage` | URL path served by the dashboard. Do not include a trailing slash. |
 | `APPLICATION_MANIFEST_PATH` | Unset | Optional absolute path to a JSON manifest merged over the bundled application labels. |
+| `USAGE_HISTORY_DATABASE_PATH` | `backend/data/usage-history.sqlite` | Optional absolute path for the local SQLite bandwidth history. |
 
 ## Data Sources And Limits
 
@@ -129,9 +138,16 @@ It should return JSON with `cpu`, `memory`, `disk`, `network`, `processes`, and 
 | Disk capacity | `df -B1 /` | Reports the dashboard container's root volume. |
 | Process disk I/O | `/proc/<pid>/io` | Shows activity of visible processes; host block-device totals may not be available inside Zo. |
 | Network totals | `/proc/net/dev` | Interface-wide totals and rates, excluding loopback. |
+| Bandwidth history | Local SQLite | Records interface-wide byte and packet deltas once per minute. |
 | Socket ownership | `ss` plus `/proc/<pid>/fd` | Linux does not expose reliable per-process network byte totals here, so traffic totals are intentionally interface-wide. |
 
 When a counter is unavailable in the container, the dashboard shows `N/A` or explains the limitation instead of fabricating a value.
+
+### Bandwidth Retention
+
+The dashboard stores one interface-wide sample per minute. It retains minute-level samples for **30 days** and rolls their byte and packet deltas into daily totals retained for **365 days**. The generated SQLite database is ignored by Git and is normally only a few megabytes; no process lists, socket endpoints, or per-application connection history are written to disk.
+
+The first recorded sample establishes a baseline, so the initial minute can show zero traffic. The next sample records the actual traffic since that baseline. Counter resets, such as a container restart, are safely recorded as zero rather than producing false negative usage.
 
 ## Application Attribution
 

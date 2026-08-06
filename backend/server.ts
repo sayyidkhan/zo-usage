@@ -1,5 +1,7 @@
 import { cpus, loadavg } from "node:os";
-import { readFileSync, readlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, readlinkSync } from "node:fs";
+import { dirname } from "node:path";
+import { Database } from "bun:sqlite";
 
 type Counter = { total: number; idle: number; at: number };
 type Bytes = { received: number; sent: number; receivedPackets: number; sentPackets: number; at: number };
@@ -8,6 +10,7 @@ type ManagedService = { pid: number; name: string };
 
 const port = Number(process.env.PORT || "8791");
 const basePath = (process.env.APP_BASE_PATH || "/usage").replace(/\/$/, "");
+const databasePath = process.env.USAGE_HISTORY_DATABASE_PATH || `${import.meta.dir}/data/usage-history.sqlite`;
 const history: Array<{ at: number; cpu: number; memory: number }> = [];
 const processIo = new Map<number, Io>();
 let cpuPrevious: Counter | undefined;
@@ -16,6 +19,58 @@ let cached: ReturnType<typeof collect> | undefined;
 let cachedAt = 0;
 let managedServices: ManagedService[] = [];
 let managedServicesAt = 0;
+let historyPrunedAt = 0;
+
+mkdirSync(dirname(databasePath), { recursive: true });
+const database = new Database(databasePath, { create: true });
+database.run("PRAGMA journal_mode = WAL");
+database.run("PRAGMA busy_timeout = 5000");
+database.run(`
+  CREATE TABLE IF NOT EXISTS network_samples (
+    at INTEGER PRIMARY KEY,
+    received_bytes INTEGER NOT NULL,
+    sent_bytes INTEGER NOT NULL,
+    received_packets INTEGER NOT NULL,
+    sent_packets INTEGER NOT NULL,
+    received_delta INTEGER NOT NULL,
+    sent_delta INTEGER NOT NULL,
+    received_packets_delta INTEGER NOT NULL,
+    sent_packets_delta INTEGER NOT NULL
+  )
+`);
+database.run(`
+  CREATE TABLE IF NOT EXISTS network_daily (
+    day TEXT PRIMARY KEY,
+    received_bytes INTEGER NOT NULL,
+    sent_bytes INTEGER NOT NULL,
+    received_packets INTEGER NOT NULL,
+    sent_packets INTEGER NOT NULL
+  )
+`);
+database.run("CREATE INDEX IF NOT EXISTS network_samples_at ON network_samples(at)");
+
+function singaporeDate(at: number) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Singapore",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date(at));
+  const value = (type: string) => parts.find((part) => part.type === type)?.value || "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
+}
+
+function totals(rows: Array<{ receivedBytes: number; sentBytes: number; receivedPackets: number; sentPackets: number }>) {
+  return rows.reduce(
+    (sum, row) => ({
+      receivedBytes: sum.receivedBytes + row.receivedBytes,
+      sentBytes: sum.sentBytes + row.sentBytes,
+      receivedPackets: sum.receivedPackets + row.receivedPackets,
+      sentPackets: sum.sentPackets + row.sentPackets
+    }),
+    { receivedBytes: 0, sentBytes: 0, receivedPackets: 0, sentPackets: 0 }
+  );
+}
 
 function manifestApplications(path: string): Record<string, string> {
   const manifest = JSON.parse(readFileSync(path, "utf8")) as { applications?: unknown };
@@ -94,8 +149,8 @@ function readCpu() {
   return Math.max(0, Math.min(100, 100 * (1 - (idle - previous.idle) / (total - previous.total))));
 }
 
-function readNetwork() {
-  const totals = readFileSync("/proc/net/dev", "utf8")
+function readNetworkTotals() {
+  return readFileSync("/proc/net/dev", "utf8")
     .split("\n")
     .slice(2)
     .map((line) => line.trim().split(/[:\s]+/))
@@ -104,6 +159,96 @@ function readNetwork() {
       (sum, parts) => ({ received: sum.received + number(parts[1]), sent: sum.sent + number(parts[9]), receivedPackets: sum.receivedPackets + number(parts[2]), sentPackets: sum.sentPackets + number(parts[10]) }),
       { received: 0, sent: 0, receivedPackets: 0, sentPackets: 0 }
     );
+}
+
+function recordBandwidth() {
+  const at = Math.floor(Date.now() / 60_000) * 60_000;
+  const exists = database.query("SELECT 1 FROM network_samples WHERE at = ?").get(at);
+  if (exists) return;
+
+  const current = readNetworkTotals();
+  const previous = database.query("SELECT received_bytes, sent_bytes, received_packets, sent_packets FROM network_samples ORDER BY at DESC LIMIT 1").get() as {
+    received_bytes: number;
+    sent_bytes: number;
+    received_packets: number;
+    sent_packets: number;
+  } | null;
+  const receivedDelta = previous && current.received >= previous.received_bytes ? current.received - previous.received_bytes : 0;
+  const sentDelta = previous && current.sent >= previous.sent_bytes ? current.sent - previous.sent_bytes : 0;
+  const receivedPacketsDelta = previous && current.receivedPackets >= previous.received_packets ? current.receivedPackets - previous.received_packets : 0;
+  const sentPacketsDelta = previous && current.sentPackets >= previous.sent_packets ? current.sentPackets - previous.sent_packets : 0;
+  const day = singaporeDate(at);
+
+  database.query(`
+    INSERT INTO network_samples (
+      at, received_bytes, sent_bytes, received_packets, sent_packets,
+      received_delta, sent_delta, received_packets_delta, sent_packets_delta
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(at, current.received, current.sent, current.receivedPackets, current.sentPackets, receivedDelta, sentDelta, receivedPacketsDelta, sentPacketsDelta);
+  database.query(`
+    INSERT INTO network_daily (day, received_bytes, sent_bytes, received_packets, sent_packets)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(day) DO UPDATE SET
+      received_bytes = received_bytes + excluded.received_bytes,
+      sent_bytes = sent_bytes + excluded.sent_bytes,
+      received_packets = received_packets + excluded.received_packets,
+      sent_packets = sent_packets + excluded.sent_packets
+  `).run(day, receivedDelta, sentDelta, receivedPacketsDelta, sentPacketsDelta);
+
+  if (Date.now() - historyPrunedAt > 24 * 60 * 60 * 1000) {
+    database.query("DELETE FROM network_samples WHERE at < ?").run(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    database.query("DELETE FROM network_daily WHERE day < ?").run(singaporeDate(Date.now() - 365 * 24 * 60 * 60 * 1000));
+    historyPrunedAt = Date.now();
+  }
+}
+
+function bandwidthHistory() {
+  const now = Date.now();
+  const today = singaporeDate(now);
+  const month = today.slice(0, 7);
+  const since = singaporeDate(now - 29 * 24 * 60 * 60 * 1000);
+  const rows = database.query(`
+    SELECT day,
+      received_bytes AS receivedBytes,
+      sent_bytes AS sentBytes,
+      received_packets AS receivedPackets,
+      sent_packets AS sentPackets
+    FROM network_daily
+    WHERE day >= ?
+    ORDER BY day DESC
+  `).all(since) as Array<{ day: string; receivedBytes: number; sentBytes: number; receivedPackets: number; sentPackets: number }>;
+  const all = database.query(`
+    SELECT day,
+      received_bytes AS receivedBytes,
+      sent_bytes AS sentBytes,
+      received_packets AS receivedPackets,
+      sent_packets AS sentPackets
+    FROM network_daily
+    WHERE day >= ?
+    ORDER BY day DESC
+  `).all(`${month}-01`) as Array<{ day: string; receivedBytes: number; sentBytes: number; receivedPackets: number; sentPackets: number }>;
+  const todayRows = rows.filter((row) => row.day === today);
+  const connectionOwners = [...snapshot().connections.reduce((owners, connection) => {
+    owners.set(connection.application, (owners.get(connection.application) || 0) + 1);
+    return owners;
+  }, new Map<string, number>())]
+    .map(([application, connections]) => ({ application, connections }))
+    .sort((a, b) => b.connections - a.connections || a.application.localeCompare(b.application))
+    .slice(0, 3);
+  return {
+    updatedAt: new Date().toISOString(),
+    today: totals(todayRows),
+    month: totals(all),
+    last30Days: totals(rows),
+    daily: rows,
+    connectionOwners,
+    detailedRetentionDays: 30,
+    dailyRetentionDays: 365
+  };
+}
+
+function readNetwork() {
+  const totals = readNetworkTotals();
   const now = Date.now();
   const previous = networkPrevious;
   networkPrevious = { ...totals, at: now };
@@ -314,6 +459,9 @@ function frontendResponse(name: string, contentType: string, cacheControl = "no-
   });
 }
 
+recordBandwidth();
+setInterval(recordBandwidth, 60_000);
+
 Bun.serve({
   hostname: "127.0.0.1",
   port,
@@ -324,6 +472,9 @@ Bun.serve({
     }
     if (url.pathname === `${basePath}/api/snapshot`) {
       return Response.json(snapshot(), { headers: { "cache-control": "no-store" } });
+    }
+    if (url.pathname === `${basePath}/api/history`) {
+      return Response.json(bandwidthHistory(), { headers: { "cache-control": "no-store" } });
     }
     if (url.pathname === `${basePath}/assets/styles.css`) {
       return frontendResponse("styles.css", "text/css; charset=utf-8");

@@ -2,6 +2,7 @@
 --full-page
 *.log
 backend/application-manifest.local.json
+backend/data/
 
 # Editor and operating-system files
 .DS_Store
