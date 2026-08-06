@@ -24,6 +24,21 @@ Browser
   -> /proc, /sys/fs/cgroup, df, and ss
 ```
 
+## Project Layout
+
+```text
+backend/
+  server.ts                  # Metrics collector, API, and static asset delivery
+  application-manifest.json  # Shared Zo service-name labels
+frontend/
+  index.html                 # Dashboard structure
+  styles.css                 # Dashboard styles
+  app.js                     # Tabs, refresh, and rendering
+  favicon.svg                # Browser icon
+```
+
+The backend injects the configured `APP_BASE_PATH` into the frontend assets at request time. This keeps `/usage` routing portable while leaving the browser UI independent of the telemetry collector.
+
 The dashboard is mounted at a path rather than the domain root. `APP_BASE_PATH` makes the HTML, API, and favicon prefix-aware, so the router can pass `/usage/*` through unchanged.
 
 ## Requirements
@@ -41,7 +56,7 @@ No npm packages, database, build step, or external telemetry account are require
 ```bash
 git clone https://github.com/sayyidkhan/zo-usage.git
 cd zo-usage
-bun run server.ts
+bun run backend/server.ts
 ```
 
 The default address is `http://127.0.0.1:8791/usage/`. The first CPU and throughput values can be `0` until a second sample is collected; the browser refreshes automatically every five seconds.
@@ -49,7 +64,7 @@ The default address is `http://127.0.0.1:8791/usage/`. The first CPU and through
 For a different local port or mount path:
 
 ```bash
-PORT=9000 APP_BASE_PATH=/monitor bun run server.ts
+PORT=9000 APP_BASE_PATH=/monitor bun run backend/server.ts
 ```
 
 Open `http://127.0.0.1:9000/monitor/` in that case.
@@ -64,7 +79,7 @@ Create or update a service with these values:
 | --- | --- |
 | Name | `zo-usage` |
 | Working directory | `/home/workspace/Start/garden-of-zo/zo-usage` |
-| Entrypoint | `bun run server.ts` |
+| Entrypoint | `bun run backend/server.ts` |
 | Service mode | `process` |
 | `PORT` | `8791` |
 | `APP_BASE_PATH` | `/usage` |
@@ -120,7 +135,7 @@ When a counter is unavailable in the container, the dashboard shows `N/A` or exp
 
 ## Application Attribution
 
-The resolver identifies managed Zo service parents, process command lines, and working directories. Friendly service labels live in `application-manifest.json`, not in application code.
+The resolver identifies managed Zo service parents, process command lines, and working directories. Friendly service labels live in `backend/application-manifest.json`, not in application code.
 
 The manifest is intentionally ordinary JSON so each operator can maintain their own services:
 
@@ -134,10 +149,10 @@ The manifest is intentionally ordinary JSON so each operator can maintain their 
 }
 ```
 
-Edit the bundled manifest when you want to share the labels with the deployment. For local labels that should survive `git pull`, copy it to `application-manifest.local.json`, edit it, and configure the service with:
+Edit the bundled manifest when you want to share the labels with the deployment. For local labels that should survive `git pull`, copy it to `backend/application-manifest.local.json`, edit it, and configure the service with:
 
 ```text
-APPLICATION_MANIFEST_PATH=/home/workspace/Start/garden-of-zo/zo-usage/application-manifest.local.json
+APPLICATION_MANIFEST_PATH=/home/workspace/Start/garden-of-zo/zo-usage/backend/application-manifest.local.json
 ```
 
 The override manifest is merged over bundled labels, so it can contain only new services or label replacements. It is ignored by Git. Restart `zo-usage` after changing either manifest. Invalid manifests are logged and safely ignored; the dashboard continues using the bundled labels. When no match exists, the dashboard falls back to a clear platform/runtime label.
@@ -147,7 +162,7 @@ The override manifest is merged over bundled labels, so it can contain only new 
 ```bash
 cd /home/workspace/Start/garden-of-zo/zo-usage
 git pull --ff-only
-bun build server.ts --target=bun --outfile=/tmp/zo-usage-check.js
+bun build backend/server.ts --target=bun --outfile=/tmp/zo-usage-check.js
 ```
 
 Restart the `zo-usage` service to load the new server code. If the update changes the routing behaviour or `APP_BASE_PATH`, also restart `private-apps`.

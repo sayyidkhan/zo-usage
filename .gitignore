@@ -1,7 +1,7 @@
 # Generated screenshots and local runtime output
 --full-page
 *.log
-application-manifest.local.json
+backend/application-manifest.local.json
 
 # Editor and operating-system files
 .DS_Store
