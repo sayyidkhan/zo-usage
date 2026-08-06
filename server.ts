@@ -366,6 +366,7 @@ refresh(); setInterval(refresh,5000);
 }
 
 Bun.serve({
+  hostname: "127.0.0.1",
   port,
   fetch(request) {
     const url = new URL(request.url);
