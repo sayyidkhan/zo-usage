@@ -47,7 +47,30 @@ database.run(`
     sent_packets INTEGER NOT NULL
   )
 `);
+database.run(`
+  CREATE TABLE IF NOT EXISTS application_traffic_samples (
+    at INTEGER NOT NULL,
+    application TEXT NOT NULL,
+    received_bytes INTEGER NOT NULL,
+    sent_bytes INTEGER NOT NULL,
+    request_count INTEGER NOT NULL,
+    error_count INTEGER NOT NULL,
+    PRIMARY KEY (at, application)
+  )
+`);
+database.run(`
+  CREATE TABLE IF NOT EXISTS application_traffic_daily (
+    day TEXT NOT NULL,
+    application TEXT NOT NULL,
+    received_bytes INTEGER NOT NULL,
+    sent_bytes INTEGER NOT NULL,
+    request_count INTEGER NOT NULL,
+    error_count INTEGER NOT NULL,
+    PRIMARY KEY (day, application)
+  )
+`);
 database.run("CREATE INDEX IF NOT EXISTS network_samples_at ON network_samples(at)");
+database.run("CREATE INDEX IF NOT EXISTS application_traffic_samples_at ON application_traffic_samples(at)");
 
 function singaporeDate(at: number) {
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -70,6 +93,11 @@ function totals(rows: Array<{ receivedBytes: number; sentBytes: number; received
     }),
     { receivedBytes: 0, sentBytes: 0, receivedPackets: 0, sentPackets: 0 }
   );
+}
+
+function nonNegativeInteger(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
 }
 
 function manifestApplications(path: string): Record<string, string> {
@@ -198,6 +226,8 @@ function recordBandwidth() {
   if (Date.now() - historyPrunedAt > 24 * 60 * 60 * 1000) {
     database.query("DELETE FROM network_samples WHERE at < ?").run(Date.now() - 30 * 24 * 60 * 60 * 1000);
     database.query("DELETE FROM network_daily WHERE day < ?").run(singaporeDate(Date.now() - 365 * 24 * 60 * 60 * 1000));
+    database.query("DELETE FROM application_traffic_samples WHERE at < ?").run(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    database.query("DELETE FROM application_traffic_daily WHERE day < ?").run(singaporeDate(Date.now() - 365 * 24 * 60 * 60 * 1000));
     historyPrunedAt = Date.now();
   }
 }
@@ -242,6 +272,93 @@ function bandwidthHistory() {
     last30Days: totals(rows),
     daily: rows,
     connectionOwners,
+    detailedRetentionDays: 30,
+    dailyRetentionDays: 365
+  };
+}
+
+async function ingestApplicationTraffic(request: Request) {
+  try {
+    const payload = await request.json() as { samples?: unknown };
+    if (!Array.isArray(payload.samples) || payload.samples.length > 64) {
+      return Response.json({ error: "samples must be an array of up to 64 entries" }, { status: 400 });
+    }
+
+    let accepted = 0;
+    for (const sample of payload.samples) {
+      if (!sample || typeof sample !== "object") continue;
+      const value = sample as Record<string, unknown>;
+      const rawApplication = typeof value.application === "string" ? value.application.trim() : "";
+      if (!rawApplication || rawApplication.length > 120) continue;
+      const at = Math.floor(nonNegativeInteger(value.at) / 60_000) * 60_000;
+      if (!at) continue;
+      const application = applicationNames[rawApplication] || rawApplication;
+      const receivedBytes = nonNegativeInteger(value.receivedBytes);
+      const sentBytes = nonNegativeInteger(value.sentBytes);
+      const requestCount = nonNegativeInteger(value.requestCount);
+      const errorCount = nonNegativeInteger(value.errorCount);
+      const day = singaporeDate(at);
+
+      database.query(`
+        INSERT INTO application_traffic_samples (at, application, received_bytes, sent_bytes, request_count, error_count)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(at, application) DO UPDATE SET
+          received_bytes = received_bytes + excluded.received_bytes,
+          sent_bytes = sent_bytes + excluded.sent_bytes,
+          request_count = request_count + excluded.request_count,
+          error_count = error_count + excluded.error_count
+      `).run(at, application, receivedBytes, sentBytes, requestCount, errorCount);
+      database.query(`
+        INSERT INTO application_traffic_daily (day, application, received_bytes, sent_bytes, request_count, error_count)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(day, application) DO UPDATE SET
+          received_bytes = received_bytes + excluded.received_bytes,
+          sent_bytes = sent_bytes + excluded.sent_bytes,
+          request_count = request_count + excluded.request_count,
+          error_count = error_count + excluded.error_count
+      `).run(day, application, receivedBytes, sentBytes, requestCount, errorCount);
+      accepted += 1;
+    }
+    return Response.json({ accepted }, { status: 202 });
+  } catch {
+    return Response.json({ error: "invalid JSON payload" }, { status: 400 });
+  }
+}
+
+function applicationTrafficHistory(application?: string) {
+  const now = Date.now();
+  const since = singaporeDate(now - 29 * 24 * 60 * 60 * 1000);
+  const parameters = application ? [since, application] : [since];
+  const filter = application ? "AND application = ?" : "";
+  const daily = database.query(`
+    SELECT day, application,
+      received_bytes AS receivedBytes,
+      sent_bytes AS sentBytes,
+      request_count AS requestCount,
+      error_count AS errorCount
+    FROM application_traffic_daily
+    WHERE day >= ? ${filter}
+    ORDER BY day DESC, application ASC
+  `).all(...parameters) as Array<{ day: string; application: string; receivedBytes: number; sentBytes: number; requestCount: number; errorCount: number }>;
+  const applications = database.query(`
+    SELECT application,
+      SUM(received_bytes) AS receivedBytes,
+      SUM(sent_bytes) AS sentBytes,
+      SUM(request_count) AS requestCount,
+      SUM(error_count) AS errorCount
+    FROM application_traffic_daily
+    WHERE day >= ?
+    GROUP BY application
+    ORDER BY receivedBytes + sentBytes DESC, application ASC
+  `).all(since) as Array<{ application: string; receivedBytes: number; sentBytes: number; requestCount: number; errorCount: number }>;
+  const live = application ? snapshot() : undefined;
+  return {
+    updatedAt: new Date().toISOString(),
+    application: application || null,
+    applications,
+    daily,
+    processes: application ? live?.processes.filter((process) => process.application === application) : [],
+    connections: application ? live?.connections.filter((connection) => connection.application === application) : [],
     detailedRetentionDays: 30,
     dailyRetentionDays: 365
   };
@@ -465,7 +582,7 @@ setInterval(recordBandwidth, 60_000);
 Bun.serve({
   hostname: "127.0.0.1",
   port,
-  fetch(request) {
+  async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === `${basePath}/favicon.svg`) {
       return frontendResponse("favicon.svg", "image/svg+xml", "public, max-age=86400");
@@ -475,6 +592,13 @@ Bun.serve({
     }
     if (url.pathname === `${basePath}/api/history`) {
       return Response.json(bandwidthHistory(), { headers: { "cache-control": "no-store" } });
+    }
+    if (url.pathname === `${basePath}/api/application-traffic` && request.method === "POST") {
+      return ingestApplicationTraffic(request);
+    }
+    if (url.pathname === `${basePath}/api/application-history`) {
+      const application = url.searchParams.get("application")?.trim() || undefined;
+      return Response.json(applicationTrafficHistory(application), { headers: { "cache-control": "no-store" } });
     }
     if (url.pathname === `${basePath}/assets/styles.css`) {
       return frontendResponse("styles.css", "text/css; charset=utf-8");

@@ -12,6 +12,7 @@ It is intentionally a small, dependency-free Bun server rather than a general-pu
 - **Disk:** root-volume capacity plus per-process read/write rates and cumulative process I/O.
 - **Network:** interface-wide transfer and packet rates, total traffic, open/listening sockets, and socket ownership by application.
 - **History:** durable interface-wide bandwidth totals for today, this month, and the last 30 days, with a daily record retained for one year.
+- **Apps:** click an application to drill into its routed HTTP traffic, daily totals, current child processes, and open connections.
 - **Attribution:** familiar application names such as OpenClaw, Zo Drive, ZoTube, Zo Moments, ZoMinAI Runtime, Codex, Zo Browser, and Zo Router instead of unexplained `bun` or `node` processes.
 
 The page is designed for a single desktop viewport: the application page does not scroll, while process tables have their own scroll area and sticky headers.
@@ -23,6 +24,10 @@ Browser
   -> private-apps gateway at /usage/
   -> zo-usage on 127.0.0.1:8791
   -> /proc, /sys/fs/cgroup, df, ss, and local SQLite history
+
+private-apps and public-apps
+  -> minute-level route aggregates
+  -> zo-usage local collector
 ```
 
 ## Project Layout
@@ -118,6 +123,12 @@ It should return JSON with `cpu`, `memory`, `disk`, `network`, `processes`, and 
 curl --fail http://127.0.0.1:8791/usage/api/history
 ```
 
+Check router-observed application traffic:
+
+```bash
+curl --fail http://127.0.0.1:8791/usage/api/application-history
+```
+
 Then open the routed `/usage/` URL and confirm all five tabs load. If the API works locally but the browser does not, inspect the private-router route prefix and restart `private-apps`.
 
 ## Environment Variables
@@ -139,6 +150,7 @@ Then open the routed `/usage/` URL and confirm all five tabs load. If the API wo
 | Process disk I/O | `/proc/<pid>/io` | Shows activity of visible processes; host block-device totals may not be available inside Zo. |
 | Network totals | `/proc/net/dev` | Interface-wide totals and rates, excluding loopback. |
 | Bandwidth history | Local SQLite | Records interface-wide byte and packet deltas once per minute. |
+| Application traffic | Zo Router | Aggregates HTTP request/response sizes, counts, and errors per application once per minute. |
 | Socket ownership | `ss` plus `/proc/<pid>/fd` | Linux does not expose reliable per-process network byte totals here, so traffic totals are intentionally interface-wide. |
 
 When a counter is unavailable in the container, the dashboard shows `N/A` or explains the limitation instead of fabricating a value.
@@ -148,6 +160,18 @@ When a counter is unavailable in the container, the dashboard shows `N/A` or exp
 The dashboard stores one interface-wide sample per minute. It retains minute-level samples for **30 days** and rolls their byte and packet deltas into daily totals retained for **365 days**. The generated SQLite database is ignored by Git and is normally only a few megabytes; no process lists, socket endpoints, or per-application connection history are written to disk.
 
 The first recorded sample establishes a baseline, so the initial minute can show zero traffic. The next sample records the actual traffic since that baseline. Counter resets, such as a container restart, are safely recorded as zero rather than producing false negative usage.
+
+Application traffic uses only the application label, minute bucket, request/response bytes, request count, and error count. It excludes URLs, client IP addresses, headers, and individual request logs. The measurement covers HTTP traffic traversing Zo Router; direct localhost traffic and arbitrary outbound protocols are not included.
+
+### Database Size Alert
+
+`scripts/check-history-database-size.sh` measures the SQLite database together with its WAL and shared-memory files. It reports one alert after the total reaches **100 MB**, then rearms only after it falls below **80 MB**. This prevents repeat notifications while the database remains above the threshold.
+
+```bash
+scripts/check-history-database-size.sh
+```
+
+Use `USAGE_HISTORY_ALERT_BYTES` to set a different threshold in bytes.
 
 ## Application Attribution
 
