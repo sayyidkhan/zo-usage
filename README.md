@@ -103,6 +103,7 @@ It should return JSON with `cpu`, `memory`, `disk`, `network`, `processes`, and 
 | --- | --- | --- |
 | `PORT` | `8791` | Loopback port used by the Bun server. |
 | `APP_BASE_PATH` | `/usage` | URL path served by the dashboard. Do not include a trailing slash. |
+| `APPLICATION_MANIFEST_PATH` | Unset | Optional absolute path to a JSON manifest merged over the bundled application labels. |
 
 ## Data Sources And Limits
 
@@ -119,17 +120,27 @@ When a counter is unavailable in the container, the dashboard shows `N/A` or exp
 
 ## Application Attribution
 
-The resolver identifies managed Zo service parents, process command lines, and working directories. Application aliases live in `server.ts` as `applicationNames`.
+The resolver identifies managed Zo service parents, process command lines, and working directories. Friendly service labels live in `application-manifest.json`, not in application code.
 
-To add a newly deployed service, add its service name and friendly label:
+The manifest is intentionally ordinary JSON so each operator can maintain their own services:
 
-```ts
-const applicationNames: Record<string, string> = {
-  "my-service": "My Service"
-};
+```json
+{
+  "version": 1,
+  "applications": {
+    "my-service": "My Service",
+    "worker-email": "Email Worker"
+  }
+}
 ```
 
-Restart `zo-usage` after editing. The dashboard falls back to a clear platform/runtime label when it cannot determine an owning application.
+Edit the bundled manifest when you want to share the labels with the deployment. For local labels that should survive `git pull`, copy it to `application-manifest.local.json`, edit it, and configure the service with:
+
+```text
+APPLICATION_MANIFEST_PATH=/home/workspace/Start/garden-of-zo/zo-usage/application-manifest.local.json
+```
+
+The override manifest is merged over bundled labels, so it can contain only new services or label replacements. It is ignored by Git. Restart `zo-usage` after changing either manifest. Invalid manifests are logged and safely ignored; the dashboard continues using the bundled labels. When no match exists, the dashboard falls back to a clear platform/runtime label.
 
 ## Update Workflow
 

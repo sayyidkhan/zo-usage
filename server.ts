@@ -17,29 +17,36 @@ let cachedAt = 0;
 let managedServices: ManagedService[] = [];
 let managedServicesAt = 0;
 
-const applicationNames: Record<string, string> = {
-  "aurelia-gt-preview": "Aurelia GT Preview",
-  "openclaw-dashboard": "OpenClaw",
-  "orin-discuss-reset-bridge": "Orin: Discuss Reset",
-  "orin-prompt-alchemist-reset-bridge": "Orin: Prompt Alchemist Reset",
-  "orin-skill-approval-bridge": "Orin Skill Approval",
-  "orin-whatsapp-watchdog": "Orin WhatsApp Watchdog",
-  "private-apps": "Private Apps Router",
-  "public-apps": "Public Apps Router",
-  tailscale: "Tailscale",
-  "zo-backlog": "Zo Backlog",
-  "zo-drive": "Zo Drive",
-  "zo-expert": "Zo Expert",
-  "zo-memories": "Zo Moments",
-  "zo-moments": "Zo Moments",
-  "zo-pocketbase": "Zo PocketBase",
-  "zo-relationship-mapper": "Zo Relationship Mapper",
-  "zo-router": "Zo Router",
-  "zo-tube": "ZoTube",
-  "zo-usage": "Usage Dashboard",
-  "zominai-runtime": "ZoMinAI Runtime",
-  zotube: "ZoTube"
-};
+function manifestApplications(path: string): Record<string, string> {
+  const manifest = JSON.parse(readFileSync(path, "utf8")) as { applications?: unknown };
+  if (!manifest.applications || typeof manifest.applications !== "object" || Array.isArray(manifest.applications)) {
+    throw new Error('Manifest must contain an "applications" object');
+  }
+  return Object.fromEntries(
+    Object.entries(manifest.applications).filter(([service, label]) => service.trim() && typeof label === "string" && label.trim())
+  ) as Record<string, string>;
+}
+
+function loadApplicationNames() {
+  const bundledPath = `${import.meta.dir}/application-manifest.json`;
+  let names: Record<string, string> = {};
+  try {
+    names = manifestApplications(bundledPath);
+  } catch (error) {
+    console.warn(`Unable to load bundled application manifest: ${error}`);
+  }
+
+  const overridePath = process.env.APPLICATION_MANIFEST_PATH;
+  if (!overridePath) return names;
+  try {
+    return { ...names, ...manifestApplications(overridePath) };
+  } catch (error) {
+    console.warn(`Unable to load application manifest override at ${overridePath}: ${error}`);
+    return names;
+  }
+}
+
+const applicationNames = loadApplicationNames();
 
 function number(value: string | undefined): number {
   return Number(value || "0");

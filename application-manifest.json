@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "applications": {
+    "aurelia-gt-preview": "Aurelia GT Preview",
+    "openclaw-dashboard": "OpenClaw",
+    "orin-discuss-reset-bridge": "Orin: Discuss Reset",
+    "orin-prompt-alchemist-reset-bridge": "Orin: Prompt Alchemist Reset",
+    "orin-skill-approval-bridge": "Orin Skill Approval",
+    "orin-whatsapp-watchdog": "Orin WhatsApp Watchdog",
+    "private-apps": "Private Apps Router",
+    "public-apps": "Public Apps Router",
+    "tailscale": "Tailscale",
+    "zo-backlog": "Zo Backlog",
+    "zo-drive": "Zo Drive",
+    "zo-expert": "Zo Expert",
+    "zo-memories": "Zo Moments",
+    "zo-moments": "Zo Moments",
+    "zo-pocketbase": "Zo PocketBase",
+    "zo-relationship-mapper": "Zo Relationship Mapper",
+    "zo-router": "Zo Router",
+    "zo-tube": "ZoTube",
+    "zo-usage": "Usage Dashboard",
+    "zominai-runtime": "ZoMinAI Runtime",
+    "zotube": "ZoTube"
+  }
+}
