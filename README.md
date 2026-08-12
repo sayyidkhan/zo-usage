@@ -10,6 +10,7 @@ It is intentionally a small, dependency-free Bun server rather than a general-pu
 - **CPU:** per-application CPU usage, process IDs, memory footprint, and disk activity.
 - **Memory:** Activity Monitor-style pressure, physical/used/available memory, file cache, shared memory, swap, process resident memory, and thread counts.
 - **Disk:** root-volume capacity plus per-process read/write rates and cumulative process I/O.
+- **Storage:** a macOS-style breakdown of visible workspace, Zo, OpenClaw, and tooling data, plus the largest locations to review. It is cached for five minutes to avoid repeated full-directory scans.
 - **Network:** interface-wide transfer and packet rates, total traffic, open/listening sockets, and socket ownership by application.
 - **History:** durable interface-wide bandwidth totals for today, this month, and the last 30 days, with a daily record retained for one year.
 - **Apps:** click an application to drill into its routed HTTP traffic, daily totals, current child processes, and open connections.
@@ -82,14 +83,14 @@ Use a Zo **process** service, not a public HTTP service. This keeps host telemet
 
 Create or update a service with these values:
 
-| Setting | Value |
-| --- | --- |
-| Name | `zo-usage` |
+| Setting           | Value                                         |
+| ----------------- | --------------------------------------------- |
+| Name              | `zo-usage`                                    |
 | Working directory | `/home/workspace/Start/garden-of-zo/zo-usage` |
-| Entrypoint | `bun run backend/server.ts` |
-| Service mode | `process` |
-| `PORT` | `8791` |
-| `APP_BASE_PATH` | `/usage` |
+| Entrypoint        | `bun run backend/server.ts`                   |
+| Service mode      | `process`                                     |
+| `PORT`            | `8791`                                        |
+| `APP_BASE_PATH`   | `/usage`                                      |
 
 The process listens on loopback at `127.0.0.1:8791`; do not create a direct public route for it.
 
@@ -123,6 +124,12 @@ It should return JSON with `cpu`, `memory`, `disk`, `network`, `processes`, and 
 curl --fail http://127.0.0.1:8791/usage/api/history
 ```
 
+Check the cached storage inventory separately:
+
+```bash
+curl --fail http://127.0.0.1:8791/usage/api/storage
+```
+
 Check router-observed application traffic:
 
 ```bash
@@ -133,27 +140,30 @@ Then open the routed `/usage/` URL and confirm all five tabs load. If the API wo
 
 ## Environment Variables
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PORT` | `8791` | Loopback port used by the Bun server. |
-| `APP_BASE_PATH` | `/usage` | URL path served by the dashboard. Do not include a trailing slash. |
-| `APPLICATION_MANIFEST_PATH` | Unset | Optional absolute path to a JSON manifest merged over the bundled application labels. |
-| `USAGE_HISTORY_DATABASE_PATH` | `backend/data/usage-history.sqlite` | Optional absolute path for the local SQLite bandwidth history. |
+| Variable                      | Default                             | Purpose                                                                               |
+| ----------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------- |
+| `PORT`                        | `8791`                              | Loopback port used by the Bun server.                                                 |
+| `APP_BASE_PATH`               | `/usage`                            | URL path served by the dashboard. Do not include a trailing slash.                    |
+| `APPLICATION_MANIFEST_PATH`   | Unset                               | Optional absolute path to a JSON manifest merged over the bundled application labels. |
+| `USAGE_HISTORY_DATABASE_PATH` | `backend/data/usage-history.sqlite` | Optional absolute path for the local SQLite bandwidth history.                        |
 
 ## Data Sources And Limits
 
-| Area | Source | Notes |
-| --- | --- | --- |
-| CPU | cgroup `cpuacct.usage`, then `/proc/stat` | Uses cgroup accounting when `/proc/stat` is zeroed by a container. |
-| Memory | `/proc/meminfo` and process status | Process resident totals can include shared pages, so they do not necessarily equal used memory. |
-| Disk capacity | `df -B1 /` | Reports the dashboard container's root volume. |
-| Process disk I/O | `/proc/<pid>/io` | Shows activity of visible processes; host block-device totals may not be available inside Zo. |
-| Network totals | `/proc/net/dev` | Interface-wide totals and rates, excluding loopback. |
-| Bandwidth history | Local SQLite | Records interface-wide byte and packet deltas once per minute. |
-| Application traffic | Zo Router | Aggregates HTTP request/response sizes, counts, and errors per application once per minute. |
-| Socket ownership | `ss` plus `/proc/<pid>/fd` | Linux does not expose reliable per-process network byte totals here, so traffic totals are intentionally interface-wide. |
+| Area                | Source                                    | Notes                                                                                                                    |
+| ------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| CPU                 | cgroup `cpuacct.usage`, then `/proc/stat` | Uses cgroup accounting when `/proc/stat` is zeroed by a container.                                                       |
+| Memory              | `/proc/meminfo` and process status        | Process resident totals can include shared pages, so they do not necessarily equal used memory.                          |
+| Disk capacity       | `df -B1 /`                                | Reports the dashboard container's root volume.                                                                           |
+| Storage inventory   | Cached `du -sx -B1` scans                 | Breaks down visible data locations; the chart is relative to the scanned inventory.                                      |
+| Process disk I/O    | `/proc/<pid>/io`                          | Shows activity of visible processes; host block-device totals may not be available inside Zo.                            |
+| Network totals      | `/proc/net/dev`                           | Interface-wide totals and rates, excluding loopback.                                                                     |
+| Bandwidth history   | Local SQLite                              | Records interface-wide byte and packet deltas once per minute.                                                           |
+| Application traffic | Zo Router                                 | Aggregates HTTP request/response sizes, counts, and errors per application once per minute.                              |
+| Socket ownership    | `ss` plus `/proc/<pid>/fd`                | Linux does not expose reliable per-process network byte totals here, so traffic totals are intentionally interface-wide. |
 
 When a counter is unavailable in the container, the dashboard shows `N/A` or explains the limitation instead of fabricating a value.
+
+Some container filesystems virtualise `df` counters, so their reported used space can be lower than the visible directory sizes. In that case, the Storage tab explicitly marks the volume counter as non-comparable and uses the scanned directory inventory for its category bar instead of presenting false free-space maths.
 
 ### Bandwidth Retention
 
@@ -209,14 +219,14 @@ Restart the `zo-usage` service to load the new server code. If the update change
 
 ## Troubleshooting
 
-| Symptom | Likely Cause | Fix |
-| --- | --- | --- |
-| CPU stays at `0%` | First sample has no baseline, or `/proc/stat` is virtualised | Wait one refresh. The server automatically prefers cgroup CPU accounting when available. |
-| Dashboard loads but tables are empty | Process/socket inspection is restricted | Run the service with sufficient process visibility and check `/proc` is mounted. |
-| `/usage/` returns 404 | Missing or stale private-router route | Add the `/usage` route without prefix stripping, then restart `private-apps`. |
-| API works on port `8791` but the routed page fails | `APP_BASE_PATH` and router prefix differ | Set both to `/usage` and restart `zo-usage`. |
-| Disk I/O is always zero | No visible process is doing disk I/O, or container counters are restricted | Generate normal workload and wait one refresh. Do not infer host-wide device activity from zero. |
-| Network data does not map to an app | Linux only exposes socket ownership, not process byte counters | Use the socket table to identify the owner; read/write totals remain interface-wide. |
+| Symptom                                            | Likely Cause                                                               | Fix                                                                                              |
+| -------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| CPU stays at `0%`                                  | First sample has no baseline, or `/proc/stat` is virtualised               | Wait one refresh. The server automatically prefers cgroup CPU accounting when available.         |
+| Dashboard loads but tables are empty               | Process/socket inspection is restricted                                    | Run the service with sufficient process visibility and check `/proc` is mounted.                 |
+| `/usage/` returns 404                              | Missing or stale private-router route                                      | Add the `/usage` route without prefix stripping, then restart `private-apps`.                    |
+| API works on port `8791` but the routed page fails | `APP_BASE_PATH` and router prefix differ                                   | Set both to `/usage` and restart `zo-usage`.                                                     |
+| Disk I/O is always zero                            | No visible process is doing disk I/O, or container counters are restricted | Generate normal workload and wait one refresh. Do not infer host-wide device activity from zero. |
+| Network data does not map to an app                | Linux only exposes socket ownership, not process byte counters             | Use the socket table to identify the owner; read/write totals remain interface-wide.             |
 
 ## Security
 
