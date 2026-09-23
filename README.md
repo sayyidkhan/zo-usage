@@ -16,7 +16,7 @@ It is intentionally a small, dependency-free Bun server rather than a general-pu
 - **Apps:** click an application to drill into its routed HTTP traffic, daily totals, current child processes, and open connections.
 - **Attribution:** familiar application names such as OpenClaw, Zo Drive, ZoTube, Zo Moments, ZoMinAI Runtime, Codex, Zo Browser, and Zo Router instead of unexplained `bun` or `node` processes.
 
-The page is designed for a single desktop viewport: the application page does not scroll, while process tables have their own scroll area and sticky headers.
+The desktop page is designed for a single viewport: the application page does not scroll, while process tables have their own scroll area and sticky headers. On narrow screens, the page scrolls normally, the tab row can be swiped sideways, and process tables retain their own scroll area.
 
 ## Architecture
 

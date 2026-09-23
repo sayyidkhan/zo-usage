@@ -595,6 +595,17 @@ body.detail-active .summary .meter {
   }
 }
 @media (max-width: 560px) {
+  html,
+  body {
+    height: auto;
+    min-height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  main {
+    height: auto;
+    min-height: 100dvh;
+  }
   main {
     padding: 16px 15px 14px;
   }
@@ -617,15 +628,32 @@ body.detail-active .summary .meter {
     font-size: 2rem;
   }
   .process-card {
-    padding: 18px 14px 0;
+    flex: 0 0 auto;
+    min-height: 520px;
+    padding: 18px 14px 14px;
+  }
+  .workspace {
+    flex: 0 0 auto;
+    min-height: auto;
+  }
+  .tabs {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar {
+    display: none;
   }
   .tab {
+    flex: 0 0 auto;
     padding-inline: 12px;
   }
   .activity-accounting {
     grid-template-columns: 160px minmax(0, 1fr);
   }
   .table-scroll {
+    flex: 0 1 360px;
+    min-height: 200px;
     overflow: auto;
   }
   table {
