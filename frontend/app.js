@@ -1,6 +1,7 @@
 const base = "__APP_BASE_PATH__";
 const bytes = (value) => {
-  const units = ["B", "KB", "MB", "GB", "TB"];
+  if (value === null || value === undefined || !Number.isFinite(value)) return "N/A";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
   let i = 0;
   while (value >= 1024 && i < units.length - 1) {
     value /= 1024;
@@ -12,6 +13,7 @@ const bytes = (value) => {
     units[i]
   );
 };
+const rate = (value) => value === null || value === undefined ? "N/A" : bytes(value) + "/s";
 const percent = (value) => value.toFixed(value < 10 ? 1 : 0) + "%";
 const escape = (value) =>
   String(value).replace(
@@ -45,8 +47,8 @@ function rows(processes, mode) {
         "</td><td>" +
         (mode === "cpu" ? bytes(p.memory) : percent(p.cpu)) +
         "</td><td>" +
-        bytes(p.disk) +
-        "/s</td></tr>",
+        rate(p.disk) +
+        "</td></tr>",
     )
     .join("");
 }
@@ -76,8 +78,8 @@ function memoryRows(processes) {
         "</td><td>" +
         percent(p.cpu) +
         "</td><td>" +
-        bytes(p.disk) +
-        "/s</td></tr>",
+        rate(p.disk) +
+        "</td></tr>",
     )
     .join("");
 }
@@ -101,10 +103,10 @@ function diskRows(processes) {
         '">' +
         escape(p.name) +
         "</td><td>" +
-        bytes(p.diskReadRate) +
-        "/s</td><td>" +
-        bytes(p.diskWriteRate) +
-        "/s</td><td>" +
+        rate(p.diskReadRate) +
+        "</td><td>" +
+        rate(p.diskWriteRate) +
+        "</td><td>" +
         bytes(p.diskRead) +
         "</td><td>" +
         bytes(p.diskWrite) +
@@ -241,6 +243,26 @@ function leadingApplication(processes, metric) {
   }
   return [...totals.values()].sort((a, b) => b[metric] - a[metric])[0];
 }
+const overview = document.querySelector("#host-overview");
+const overviewToggle = document.querySelector("#overview-toggle");
+const overviewPreferenceKey = "zo-usage.overview-hidden";
+function setOverviewHidden(hidden) {
+  overview.hidden = hidden;
+  document.body.classList.toggle("overview-hidden", hidden);
+  overviewToggle.setAttribute("aria-expanded", String(!hidden));
+  overviewToggle.textContent = hidden ? "Show overview" : "Hide overview";
+}
+try {
+  setOverviewHidden(localStorage.getItem(overviewPreferenceKey) === "true");
+} catch {
+  setOverviewHidden(false);
+}
+overviewToggle.addEventListener("click", () => {
+  setOverviewHidden(!overview.hidden);
+  try {
+    localStorage.setItem(overviewPreferenceKey, String(overview.hidden));
+  } catch {}
+});
 let activeTab = "cpu",
   selectedApplication = "";
 function setTab(name) {
@@ -255,6 +277,7 @@ function setTab(name) {
   ];
   activeTab = name;
   document.body.classList.toggle("detail-active", name !== "cpu");
+  document.body.classList.toggle("storage-active", name === "storage");
   for (const tab of tabs) {
     const selected = tab === name;
     document
@@ -310,37 +333,31 @@ function renderDetails(data) {
   document.querySelector("#disk-processes").innerHTML = diskRows(
     data.processes,
   );
-  document.querySelector("#disk-capacity").textContent =
-    percent(diskPct) + " used";
+  document.querySelector("#disk-capacity").textContent = bytes(data.disk.inventoryBytes);
   document.querySelector("#disk-capacity-detail").textContent =
-    bytes(data.disk.available) + " free";
-  document.querySelector("#disk-capacity-meter").style.width = diskPct + "%";
+    data.disk.inventoryUpdatedAt
+      ? "Scanned " + new Date(data.disk.inventoryUpdatedAt).toLocaleTimeString("en-SG", { timeZone: "Asia/Singapore" }) +
+        (data.disk.inventoryStale ? " · Last scan" : "") + (data.disk.inventoryIncomplete ? " · Partial scan" : "")
+      : "Scanning visible locations...";
+  document.querySelector("#disk-capacity-meter").style.width = data.disk.volumeComparable ? diskPct + "%" : "0%";
   document.querySelector("#disk-total").textContent = bytes(data.disk.total);
   document.querySelector("#disk-used").textContent = bytes(data.disk.used);
-  document.querySelector("#disk-available").textContent = bytes(
-    data.disk.available,
-  );
-  document.querySelector("#disk-read-rate").textContent =
-    bytes(data.disk.readRate) + "/s";
-  document.querySelector("#disk-write-rate").textContent =
-    bytes(data.disk.writeRate) + "/s";
+  document.querySelector("#disk-available").textContent = data.disk.volumeComparable ? bytes(data.disk.available) : "N/A";
+  document.querySelector("#disk-read-rate").textContent = rate(data.disk.readRate);
+  document.querySelector("#disk-write-rate").textContent = rate(data.disk.writeRate);
   document.querySelector("#disk-tracked-read").textContent = bytes(
     data.disk.trackedRead,
   );
   document.querySelector("#disk-tracked-write").textContent = bytes(
     data.disk.trackedWrite,
   );
-  document.querySelector("#disk-app-count").textContent = activeApps;
-  const diskLeader = data.processes.slice().sort((a, b) => b.disk - a.disk)[0];
-  document.querySelector("#disk-explanation").textContent =
-    diskLeader && diskLeader.disk > 0
-      ? diskLeader.application +
-        " (" +
-        diskLeader.name +
-        ") is currently generating the most I/O at " +
-        bytes(diskLeader.disk) +
-        "/s. Total read/write values cover active processes."
-      : "No active process disk I/O right now. Totals cover active processes; host device counters are not exposed in this Zo container.";
+  document.querySelector("#disk-app-count").textContent = data.disk.ioSource === "unavailable" ? "N/A" : activeApps;
+  document.querySelector("#io-heading").textContent = data.disk.ioSource === "physical" ? "Disk activity" : "Application I/O";
+  document.querySelector("#io-source").textContent = data.disk.physicalIoAvailable ? "Physical disk counters" : "Physical disk I/O unavailable";
+  document.querySelector("#disk-explanation").textContent = data.disk.ioDescription +
+    " Lifetime totals cover currently running processes. Rates need two samples." +
+    (!data.disk.volumeComparable ? " Volume figures below are virtual counters and cannot be used to calculate actual free space." : "");
+  document.querySelector("#disk-explanation").title = document.querySelector("#disk-explanation").textContent;
   document.querySelector("#network-connections").innerHTML = connectionRows(
     data.connections,
   );
@@ -410,10 +427,12 @@ function render(data) {
   document.querySelector("#memory-detail").textContent =
     "of " + bytes(data.memory.total) + " · " + percent(memoryPct);
   document.querySelector("#memory-meter").style.width = memoryPct + "%";
-  document.querySelector("#disk").textContent = bytes(data.disk.used);
-  document.querySelector("#disk-detail").textContent =
-    "of " + bytes(data.disk.total) + " · " + percent(diskPct);
-  document.querySelector("#disk-meter").style.width = diskPct + "%";
+  document.querySelector("#disk").textContent = bytes(data.disk.inventoryBytes);
+  document.querySelector("#disk-detail").textContent = data.disk.inventoryUpdatedAt
+    ? "Visible locations · " + new Date(data.disk.inventoryUpdatedAt).toLocaleTimeString("en-SG", { timeZone: "Asia/Singapore" }) +
+      (data.disk.inventoryStale ? " · Last scan" : "") + (data.disk.inventoryIncomplete ? " · Partial" : "")
+    : "Scanning visible locations...";
+  document.querySelector("#disk-meter").style.width = data.disk.volumeComparable ? diskPct + "%" : "0%";
   document.querySelector("#network").textContent =
     bytes(data.network.down) + "/s";
   document.querySelector("#network-detail").textContent =
@@ -426,7 +445,7 @@ function render(data) {
     data.processes,
   );
   document.querySelector("#updated").textContent =
-    "Updated " + new Date(data.updatedAt).toLocaleTimeString();
+    "Updated " + new Date(data.updatedAt).toLocaleTimeString("en-SG", { timeZone: "Asia/Singapore" }) + " SGT";
   document.querySelector("#memory-pressure").textContent = pressure.label;
   document.querySelector("#memory-pressure-detail").textContent =
     percent(availablePct) + " available";
@@ -506,30 +525,136 @@ function renderHistory(data) {
     data.dailyRetentionDays +
     " days.";
 }
+let storageData;
+const storageExpanded = new Set(["/home/workspace"]);
+const storageSearchExpanded = new Set();
+let storageSearchQuery = "";
 function storageRows(locations, inventoryBytes) {
-  return (
-    locations
-      .map(
-        (location) =>
-          '<tr><td class="storage-location"><strong>' +
-          escape(location.name) +
-          '</strong><span title="' +
-          escape(location.path) +
-          '">' +
-          escape(location.path) +
-          "</span></td><td>" +
-          bytes(location.bytes) +
-          "</td><td>" +
-          percent((location.bytes / inventoryBytes) * 100) +
-          '</td><td class="storage-description">' +
-          escape(location.description) +
-          "</td></tr>",
-      )
-      .join("") ||
-    '<tr><td colspan="4" class="empty-row">No visible storage locations were found.</td></tr>'
-  );
+  const byPath = new Map(locations.map((location) => [location.path, location]));
+  const children = new Map();
+  const parents = new Map();
+  for (const location of locations) {
+    let parent = location.path.slice(0, location.path.lastIndexOf("/"));
+    while (parent && !byPath.has(parent)) parent = parent.slice(0, parent.lastIndexOf("/"));
+    parents.set(location.path, parent);
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent).push(location);
+  }
+  const query = document.querySelector("#storage-search").value.trim().toLowerCase();
+  const matched = new Set();
+  if (query) for (const location of locations) {
+    if (!(location.name + " " + location.path).toLowerCase().includes(query)) continue;
+    let path = location.path;
+    while (path) { matched.add(path); path = parents.get(path); }
+  }
+  if (query !== storageSearchQuery) {
+    storageSearchQuery = query;
+    storageSearchExpanded.clear();
+    for (const path of matched) storageSearchExpanded.add(path);
+  }
+  const expandedPaths = query ? storageSearchExpanded : storageExpanded;
+  const ordered = [];
+  function visit(parent, depth) {
+    const siblings = (children.get(parent) || []).slice().sort(
+      (a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name),
+    );
+    for (const location of siblings) {
+      if (query && !matched.has(location.path)) continue;
+      ordered.push({ ...location, depth, parent });
+      if (expandedPaths.has(location.path)) visit(location.path, depth + 1);
+    }
+  }
+  visit("", 0);
+  return ordered.map((location) => {
+    const nested = children.get(location.path) || [];
+    const expanded = expandedPaths.has(location.path);
+    const share = location.bytes / (byPath.get(location.parent)?.bytes || inventoryBytes || 1) * 100;
+    const button = nested.length
+      ? '<button type="button" class="storage-toggle" data-path="' + escape(location.path) +
+        '" aria-expanded="' + expanded + '" aria-label="' + (expanded ? "Collapse " : "Expand ") +
+        escape(location.name) + '">' + (expanded ? "▾" : "▸") + '</button>'
+      : '<span class="storage-leaf" aria-hidden="true">·</span>';
+    return '<tr data-storage-depth="' + location.depth + '"><td class="storage-location" style="--storage-depth:' +
+      location.depth + '"><div class="storage-folder">' + button + '<div><strong>' + escape(location.name) +
+      '</strong><span title="' + escape(location.path) + '">' + escape(location.path) +
+      '</span></div></div></td><td class="storage-size" title="' + location.bytes.toLocaleString("en-GB") +
+      ' bytes">' + bytes(location.bytes) + '</td><td><span class="storage-share">' + percent(share) +
+      '</span></td><td class="storage-description">' +
+      escape(location.description || (nested.length ? nested.length + " subfolders shown" : "Contents included in size")) +
+      '</td></tr>';
+  }).join("") || '<tr><td colspan="4" class="empty-row">No matching folders in this scan.</td></tr>';
 }
+document.querySelector("#storage-locations").addEventListener("click", (event) => {
+  const button = event.target.closest(".storage-toggle");
+  if (!button || !storageData?.inventory) return;
+  const path = button.dataset.path;
+  const expandedPaths = storageSearchQuery ? storageSearchExpanded : storageExpanded;
+  if (expandedPaths.has(path)) expandedPaths.delete(path); else expandedPaths.add(path);
+  const scroll = document.querySelector("#storage-panel .table-scroll");
+  const top = scroll.scrollTop;
+  document.querySelector("#storage-locations").innerHTML = storageRows(storageData.inventory.locations, storageData.inventory.bytes);
+  scroll.scrollTop = top;
+  document.querySelectorAll(".storage-toggle").forEach((item) => {
+    if (item.dataset.path === path) item.focus({ preventScroll: true });
+  });
+});
+document.querySelector("#storage-search").addEventListener("input", () => {
+  if (storageData) renderStorage(storageData);
+});
+document.querySelector("#storage-collapse").addEventListener("click", () => {
+  const expandedPaths = storageSearchQuery ? storageSearchExpanded : storageExpanded;
+  expandedPaths.clear();
+  if (storageData) renderStorage(storageData);
+});
+const storageCoverage = document.querySelector("#storage-coverage");
+document.querySelector("#storage-included").addEventListener("click", () => {
+  storageCoverage.showModal();
+});
+document.querySelector("#storage-coverage-close").addEventListener("click", () => {
+  storageCoverage.close();
+});
+storageCoverage.addEventListener("click", (event) => {
+  if (event.target !== storageCoverage) return;
+  const bounds = storageCoverage.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right ||
+      event.clientY < bounds.top || event.clientY > bounds.bottom) storageCoverage.close();
+});
+document.querySelector("#storage-rescan").addEventListener("click", async () => {
+  const button = document.querySelector("#storage-rescan");
+  button.disabled = true;
+  button.textContent = "Starting scan…";
+  try {
+    const response = await fetch(base + "/api/storage/rescan", {
+      method: "POST", headers: { Accept: "application/json", "X-Usage-Action": "rescan" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error();
+    renderStorage(await response.json());
+  } catch {
+    document.querySelector("#storage-explanation").textContent = "Could not start a scan. Try again.";
+    document.querySelector("#storage-explanation").hidden = false;
+  } finally {
+    button.disabled = Boolean(storageData?.refreshing);
+    button.textContent = button.disabled ? "Scanning…" : "Rescan now";
+  }
+});
 function renderStorage(data) {
+  storageData = data;
+  const rescan = document.querySelector("#storage-rescan");
+  rescan.disabled = Boolean(data.refreshing);
+  rescan.textContent = data.refreshing ? "Scanning…" : "Rescan now";
+  if (!data.inventory) {
+    document.querySelector("#storage-inventory-total").textContent =
+      data.status === "error" ? "Unavailable" : "Scanning...";
+    document.querySelector("#storage-inventory-detail").textContent =
+      "No completed scan yet";
+    document.querySelector("#storage-explanation").textContent =
+      data.status === "error"
+        ? "The storage scan could not finish. Retrying automatically."
+        : "Scanning storage in the background. Results will appear automatically; other tabs remain available.";
+    document.querySelector("#storage-explanation").hidden = false;
+    return;
+  }
   const { inventory, filesystem } = data;
   const largest = inventory.categories[0];
   document.querySelector("#storage-bar").innerHTML = inventory.categories
@@ -556,18 +681,16 @@ function renderStorage(data) {
         "</b></span>",
     )
     .join("");
-  document.querySelector("#storage-locations").innerHTML = storageRows(
-    inventory.locations,
-    inventory.bytes,
-  );
+  const folderTable = document.querySelector("#storage-locations");
+  const folderRows = storageRows(inventory.locations, inventory.bytes);
+  if (folderTable.innerHTML !== folderRows) folderTable.innerHTML = folderRows;
   document.querySelector("#storage-inventory-total").textContent = bytes(
     inventory.bytes,
   );
   document.querySelector("#storage-inventory-detail").textContent =
-    "across " + inventory.categories.length + " categories";
-  document.querySelector("#storage-inventory-meter").style.width = "100%";
-  document.querySelector("#storage-inventory-meter").style.background =
-    largest?.color || "#4ea778";
+    "Last scanned " + new Date(data.updatedAt).toLocaleString("en-SG", {
+      timeZone: "Asia/Singapore", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+    }) + " SGT" + (data.refreshing ? " · Scanning…" : data.stale ? " · Update overdue" : "");
   document.querySelector("#storage-location-count").textContent =
     inventory.locations.length;
   document.querySelector("#storage-largest-category").textContent = largest
@@ -579,23 +702,20 @@ function renderStorage(data) {
   document.querySelector("#storage-filesystem-used").textContent = bytes(
     filesystem.used,
   );
-  document.querySelector("#storage-filesystem-free").textContent = bytes(
-    filesystem.available,
-  );
+  document.querySelector("#storage-filesystem-free").textContent = filesystem.comparable ? bytes(filesystem.available) : "N/A";
   document.querySelector("#storage-rescan-cadence").textContent =
     data.scanIntervalMinutes + " min";
-  document.querySelector("#storage-explanation").textContent =
-    filesystem.comparable
-      ? "Visible inventory accounts for " +
-        percent((inventory.bytes / filesystem.used) * 100) +
-        " of filesystem use. Categories are rescanned every " +
-        data.scanIntervalMinutes +
-        " minutes."
-      : "This Zo container virtualises its filesystem counter: it reports " +
-        bytes(filesystem.used) +
-        " used, while the visible location scan totals " +
-        bytes(inventory.bytes) +
-        ". The chart is deliberately based on the visible inventory, not that misleading capacity counter.";
+  const storageExplanation = document.querySelector("#storage-explanation");
+  storageExplanation.textContent = "";
+  storageExplanation.hidden = !data.error && !data.incomplete;
+  if (data.error) {
+    document.querySelector("#storage-explanation").textContent +=
+      " Refresh failed; showing the last completed scan and retrying automatically.";
+  }
+  if (data.incomplete) {
+    document.querySelector("#storage-explanation").textContent +=
+      " Some files could not be read; sizes may be incomplete.";
+  }
 }
 function renderApplications(data) {
   const selected = Boolean(data.application),
@@ -655,14 +775,23 @@ async function refreshApplications() {
       "Unable to read application traffic history.";
   }
 }
+let storageRequestPending = false;
 async function refreshStorage() {
+  if (storageRequestPending) return;
+  storageRequestPending = true;
   try {
-    const response = await fetch(base + "/api/storage", { cache: "no-store" });
+    const response = await fetch(base + "/api/storage", {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
+    });
     if (!response.ok) throw new Error();
     renderStorage(await response.json());
   } catch {
     document.querySelector("#storage-explanation").textContent =
-      "Unable to read the storage inventory.";
+      "Unable to refresh the storage inventory. Retrying automatically.";
+  } finally {
+    storageRequestPending = false;
   }
 }
 async function refreshHistory() {
@@ -689,3 +818,4 @@ async function refresh() {
 }
 refresh();
 setInterval(refresh, 5000);
+setInterval(() => { if (activeTab === "storage") refreshStorage(); }, 5000);

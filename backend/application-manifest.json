@@ -1,7 +1,6 @@
 {
   "version": 1,
   "applications": {
-    "aurelia-gt-preview": "Aurelia GT Preview",
     "openclaw-dashboard": "OpenClaw",
     "orin-discuss-reset-bridge": "Orin: Discuss Reset",
     "orin-prompt-alchemist-reset-bridge": "Orin: Prompt Alchemist Reset",

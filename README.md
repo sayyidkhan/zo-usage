@@ -6,17 +6,17 @@ It is intentionally a small, dependency-free Bun server rather than a general-pu
 
 ## What It Shows
 
-- **Summary:** current CPU, memory, disk capacity, network throughput, and refresh time.
+- **Summary:** current CPU, memory, scanned storage for configured locations, network throughput, and refresh time. Scanned storage includes Hermes and Codex data and refreshes every five minutes; it is not whole-volume usage.
 - **CPU:** per-application CPU usage, process IDs, memory footprint, and disk activity.
 - **Memory:** Activity Monitor-style pressure, physical/used/available memory, file cache, shared memory, swap, process resident memory, and thread counts.
-- **Disk:** root-volume capacity plus per-process read/write rates and cumulative process I/O.
-- **Storage:** a macOS-style breakdown of visible workspace, Zo, OpenClaw, and tooling data, plus the largest locations to review. It is cached for five minutes to avoid repeated full-directory scans.
+- **Disk:** scanned storage, explicitly labelled virtual volume counters, and per-process read/write rates and lifetime totals. A small startup file-write/read probe chooses working physical counters or logical application I/O; unsupported values and first-sample rates show `N/A`.
+- **Storage:** an expandable, searchable folder tree discovered from the filesystem on each scan. Workspace follows the actual hierarchy, including Start → pal → kingdom-of-pal, with friendly labels for PAL and Garden of Zo. The seven non-overlapping scan roots cover Workspace, Zo data, OpenClaw recovery files, Hermes, Codex and tool caches. Folders are discovered up to four levels below each root; deeper contents still count towards folder sizes. Dependency/Git directories are single entries. Siblings sort by size, each parent includes its children, and percentages show each folder's share of its parent (root percentages show share of the full inventory). Search reveals matching folders and their ancestors, with working expand/collapse controls. Search expansion is separate from normal browsing and persists across data refreshes; Collapse all keeps the search text. No file contents are read by the inventory. Totals use binary units (KiB/MiB/GiB). The category breakdown, folder help, technical volume figures and coverage details open in a modal using “What is included?” beside the scan button. Close it with Close, Escape or a click outside; keyboard focus stays inside while open and returns to the button when closed. The last completed scan time appears in SGT, alongside scanning/overdue/error status. Scans run every five minutes; Rescan now starts a background scan with one concurrent traversal, a 30-second minimum between manual starts and failure backoff. Results persist in SQLite across restarts. New, renamed and deleted directories appear after a completed scan, rather than as live file events.
 - **Network:** interface-wide transfer and packet rates, total traffic, open/listening sockets, and socket ownership by application.
 - **History:** durable interface-wide bandwidth totals for today, this month, and the last 30 days, with a daily record retained for one year.
 - **Apps:** click an application to drill into its routed HTTP traffic, daily totals, current child processes, and open connections.
 - **Attribution:** familiar application names such as OpenClaw, Zo Drive, ZoTube, Zo Moments, ZoMinAI Runtime, Codex, Zo Browser, and Zo Router instead of unexplained `bun` or `node` processes.
 
-The desktop page is designed for a single viewport: the application page does not scroll, while process tables have their own scroll area and sticky headers. On narrow screens, the page scrolls normally, the tab row can be swiped sideways, and process tables retain their own scroll area.
+The desktop process views fit a single viewport with scrolling tables and sticky headers. The Usage heading is 32px on desktop and 28px on mobile. All views, including Storage, show the four host overview cards by default. The header’s “Hide overview” / “Show overview” button frees space above the resource tabs; the choice applies across tabs and is remembered in this browser. Storage also uses a compact total, scan timestamp and action row above the folder browser. It allows page scrolling on shorter screens; the folder table has its own bounded scroll area. On narrow screens, the page scrolls normally, the tab row can be swiped sideways, and process tables retain their own scroll area.
 
 ## Architecture
 
@@ -112,6 +112,8 @@ Do **not** set `stripPrefix`: the dashboard receives `/usage/`, `/usage/api/snap
 
 ## Verify A Deployment
 
+Run the storage regression checks with `bun test backend/storage.test.ts`. Run all collector regressions with `bun test backend`, including I/O fallback, missing counters, PID reuse and counter resets. They cover concurrent cold requests, persistent caching, failed refreshes with retries, and overlapping directory sizes.
+
 Check the local data endpoint first:
 
 ```bash
@@ -125,6 +127,8 @@ curl --fail http://127.0.0.1:8791/usage/api/history
 ```
 
 Check the cached storage inventory separately:
+
+A manual scan uses `POST /usage/api/storage/rescan` with `X-Usage-Action: rescan`. It returns immediately with status 202; poll the normal storage endpoint for completion. The action rejects cross-site browser requests and coalesces concurrent scans.
 
 ```bash
 curl --fail http://127.0.0.1:8791/usage/api/storage
@@ -154,8 +158,8 @@ Then open the routed `/usage/` URL and confirm all five tabs load. If the API wo
 | CPU                 | cgroup `cpuacct.usage`, then `/proc/stat` | Uses cgroup accounting when `/proc/stat` is zeroed by a container.                                                       |
 | Memory              | `/proc/meminfo` and process status        | Process resident totals can include shared pages, so they do not necessarily equal used memory.                          |
 | Disk capacity       | `df -B1 /`                                | Reports the dashboard container's root volume.                                                                           |
-| Storage inventory   | Cached `du -sx -B1` scans                 | Breaks down visible data locations; the chart is relative to the scanned inventory.                                      |
-| Process disk I/O    | `/proc/<pid>/io`                          | Shows activity of visible processes; host block-device totals may not be available inside Zo.                            |
+| Storage inventory   | Background `du -x -B1 --max-depth` scan | Walks each category root once and discovers directory sizes to depth four from the same traversal, using NUL-delimited output for unusual names. Scans have a two-minute timeout, one concurrent scan, and automatic retries; failed refreshes preserve the saved result. |
+| Process I/O | `/proc/<pid>/io` | Startup probe verifies a 64 KiB write/read. Uses physical `read_bytes`/`write_bytes` when working; otherwise verified `rchar`/`wchar`. Logical bytes include cached files, sockets and pipes and are not physical disk traffic. Missing counters remain null. Rates reset for reused PIDs and counter resets. |
 | Network totals      | `/proc/net/dev`                           | Interface-wide totals and rates, excluding loopback.                                                                     |
 | Bandwidth history   | Local SQLite                              | Records interface-wide byte and packet deltas once per minute.                                                           |
 | Application traffic | Zo Router                                 | Aggregates HTTP request/response sizes, counts, and errors per application once per minute.                              |
@@ -225,7 +229,7 @@ Restart the `zo-usage` service to load the new server code. If the update change
 | Dashboard loads but tables are empty               | Process/socket inspection is restricted                                    | Run the service with sufficient process visibility and check `/proc` is mounted.                 |
 | `/usage/` returns 404                              | Missing or stale private-router route                                      | Add the `/usage` route without prefix stripping, then restart `private-apps`.                    |
 | API works on port `8791` but the routed page fails | `APP_BASE_PATH` and router prefix differ                                   | Set both to `/usage` and restart `zo-usage`.                                                     |
-| Disk I/O is always zero                            | No visible process is doing disk I/O, or container counters are restricted | Generate normal workload and wait one refresh. Do not infer host-wide device activity from zero. |
+| Physical disk I/O unavailable | Zo does not expose working physical counters | The Disk tab shows verified application I/O instead and explains its scope. `N/A` means unavailable or waiting for a second sample. |
 | Network data does not map to an app                | Linux only exposes socket ownership, not process byte counters             | Use the socket table to identify the owner; read/write totals remain interface-wide.             |
 
 ## Security

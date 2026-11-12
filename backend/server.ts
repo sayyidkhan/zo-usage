@@ -1,7 +1,9 @@
 import { cpus, loadavg } from "node:os";
-import { existsSync, mkdirSync, readFileSync, readlinkSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, readFileSync, readlinkSync } from "node:fs";
+import { basename, dirname, relative } from "node:path";
 import { Database } from "bun:sqlite";
+import { createStorageCache, directoryUsage } from "./storage";
+import { createIoTracker, probeIo } from "./io";
 
 type Counter = { total: number; idle: number; at: number };
 type Bytes = {
@@ -11,7 +13,6 @@ type Bytes = {
   sentPackets: number;
   at: number;
 };
-type Io = { read: number; write: number; at: number };
 type ManagedService = { pid: number; name: string };
 type StorageLocation = {
   name: string;
@@ -26,7 +27,6 @@ const databasePath =
   process.env.USAGE_HISTORY_DATABASE_PATH ||
   `${import.meta.dir}/data/usage-history.sqlite`;
 const history: Array<{ at: number; cpu: number; memory: number }> = [];
-const processIo = new Map<number, Io>();
 let cpuPrevious: Counter | undefined;
 let networkPrevious: Bytes | undefined;
 let cached: ReturnType<typeof collect> | undefined;
@@ -34,8 +34,6 @@ let cachedAt = 0;
 let managedServices: ManagedService[] = [];
 let managedServicesAt = 0;
 let historyPrunedAt = 0;
-let storageCached: ReturnType<typeof storageInventory> | undefined;
-let storageCachedAt = 0;
 
 const storageCacheMs = 5 * 60 * 1000;
 const storageCategoryDefinitions = [
@@ -54,8 +52,20 @@ const storageCategoryDefinitions = [
   {
     name: "OpenClaw",
     path: "/root/.openclaw",
-    description: "Agents, sessions, plugins, and generated data",
+    description: "Retired runtime: protected recovery files and histories",
     color: "#d4a247",
+  },
+  {
+    name: "Hermes",
+    path: "/root/.hermes",
+    description: "Agent profiles, histories, and backups",
+    color: "#6599b0",
+  },
+  {
+    name: "Codex",
+    path: "/root/.codex",
+    description: "Codex sessions, plugins, and tooling",
+    color: "#b16b91",
   },
   {
     name: "Developer tools",
@@ -72,6 +82,8 @@ const storageCategoryDefinitions = [
 ];
 
 mkdirSync(dirname(databasePath), { recursive: true });
+const ioSource = probeIo(dirname(databasePath));
+const ioTracker = createIoTracker(ioSource);
 const database = new Database(databasePath, { create: true });
 database.run("PRAGMA journal_mode = WAL");
 database.run("PRAGMA busy_timeout = 5000");
@@ -636,28 +648,23 @@ function readDisk() {
   return { total, used, available: number(output[3]) };
 }
 
-function directoryUsage(paths: string[]) {
-  const existing = [...new Set(paths)].filter((path) => existsSync(path));
-  if (!existing.length) return new Map<string, number>();
-  const output = new TextDecoder().decode(
-    Bun.spawnSync(["/usr/bin/du", "-sx", "-B1", ...existing]).stdout,
-  );
-  return new Map(
-    output
-      .split("\n")
-      .map((line) => line.match(/^(\d+)\s+(.+)$/))
-      .filter((match): match is RegExpMatchArray => Boolean(match))
-      .map((match) => [match[2], number(match[1])]),
-  );
-}
-
-function storageInventory() {
+async function storageInventory() {
   const locationDefinitions = [
     ...storageCategoryDefinitions,
     {
       name: "Garden of Zo",
       path: "/home/workspace/Start/garden-of-zo",
       description: "Hosted Zo applications",
+    },
+    {
+      name: "PAL",
+      path: "/home/workspace/Start/pal",
+      description: "PAL agents, projects, and shared source; included in Workspace",
+    },
+    {
+      name: "Kingdom of PAL",
+      path: "/home/workspace/Start/pal/kingdom-of-pal",
+      description: "PAL control plane and registry source; included in PAL and Workspace",
     },
     {
       name: "Hackathons",
@@ -685,8 +692,10 @@ function storageInventory() {
       description: "Installed OpenClaw plugins",
     },
   ];
-  const sizes = directoryUsage(
-    locationDefinitions.map((location) => location.path),
+  const { sizes, incomplete } = await directoryUsage(
+    storageCategoryDefinitions.map((location) => location.path),
+    120_000,
+    4,
   );
   const categories = storageCategoryDefinitions
     .map((category) => ({ ...category, bytes: sizes.get(category.path) || 0 }))
@@ -698,54 +707,61 @@ function storageInventory() {
   );
   const disk = readDisk();
   const filesystemCounterComparable = disk.used >= inventoriedBytes * 0.95;
-  const locations: StorageLocation[] = locationDefinitions
-    .map((location) => ({ ...location, bytes: sizes.get(location.path) || 0 }))
-    .filter((location) => location.bytes > 0)
-    .sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name));
+  const labels = new Map(locationDefinitions.map((location) => [location.path, location]));
+  const locations: StorageLocation[] = [...sizes].filter(([path]) => {
+    const root = storageCategoryDefinitions.find((root) => path === root.path || path.startsWith(root.path + "/"))!;
+    const parts = relative(root.path, path).split("/");
+    return !parts.slice(0, -1).some((part) => ["node_modules", ".git", "Trash"].includes(part));
+  }).map(([path, bytes]) => ({
+    name: labels.get(path)?.name || basename(path),
+    path, bytes,
+    description: labels.get(path)?.description || "",
+  })).sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name));
 
   return {
     updatedAt: new Date().toISOString(),
     scanIntervalMinutes: storageCacheMs / 60_000,
+    inventoryVersion: 4,
+    discoveryDepth: 4,
+    incomplete,
     inventory: { bytes: inventoriedBytes, categories, locations },
     filesystem: { ...disk, comparable: filesystemCounterComparable },
   };
 }
 
+database.run(`
+  CREATE TABLE IF NOT EXISTS storage_inventory_cache (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    payload TEXT NOT NULL
+  )
+`);
+const storageCache = createStorageCache(storageInventory, {
+  intervalMs: storageCacheMs,
+  load() {
+    const row = database.query(
+      "SELECT payload FROM storage_inventory_cache WHERE id = 1",
+    ).get() as { payload: string } | null;
+    const saved = row ? JSON.parse(row.payload) : undefined;
+    return saved?.inventoryVersion === 4 ? saved : undefined;
+  },
+  save(value) {
+    database.query(
+      "INSERT OR REPLACE INTO storage_inventory_cache (id, payload) VALUES (1, ?)",
+    ).run(JSON.stringify(value));
+  },
+});
+
 function storageSnapshot() {
-  if (!storageCached || Date.now() - storageCachedAt >= storageCacheMs) {
-    storageCached = storageInventory();
-    storageCachedAt = Date.now();
-  }
-  return storageCached;
+  return storageCache.snapshot();
 }
 
 function diskActivity(pid: number) {
   try {
-    const values = Object.fromEntries(
-      readFileSync(`/proc/${pid}/io`, "utf8")
-        .split("\n")
-        .map((line) => line.match(/^(read_bytes|write_bytes):\s+(\d+)/))
-        .filter((match): match is RegExpMatchArray => Boolean(match))
-        .map((match) => [match[1], number(match[2])]),
-    ) as Record<string, number>;
-    const now = Date.now();
-    const current = {
-      read: values.read_bytes || 0,
-      write: values.write_bytes || 0,
-      at: now,
-    };
-    const previous = processIo.get(pid);
-    processIo.set(pid, current);
-    if (!previous || now <= previous.at)
-      return { ...current, readRate: 0, writeRate: 0 };
-    const seconds = (now - previous.at) / 1000;
-    return {
-      ...current,
-      readRate: Math.max(0, (current.read - previous.read) / seconds),
-      writeRate: Math.max(0, (current.write - previous.write) / seconds),
-    };
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const identity = stat.slice(stat.lastIndexOf(")") + 2).split(/\s+/)[19];
+    return ioTracker.sample(pid, identity, readFileSync(`/proc/${pid}/io`, "utf8"), performance.now());
   } catch {
-    return { read: 0, write: 0, at: Date.now(), readRate: 0, writeRate: 0 };
+    return ioTracker.sample(pid, "", "", performance.now());
   }
 }
 
@@ -882,7 +898,7 @@ function processes() {
         diskWrite: io.write,
         diskReadRate: io.readRate,
         diskWriteRate: io.writeRate,
-        disk: io.readRate + io.writeRate,
+        disk: io.readRate === null || io.writeRate === null ? null : io.readRate + io.writeRate,
       };
     })
     .filter((process) => process.name !== "ps");
@@ -921,6 +937,7 @@ function networkConnections(processList: ReturnType<typeof processes>) {
 
 function collect() {
   const processList = processes();
+  ioTracker.prune(new Set(processList.map((p) => p.pid)));
   const memory = {
     ...readMemory(),
     processResident: processList.reduce(
@@ -928,24 +945,30 @@ function collect() {
       0,
     ),
   };
+  const storage = storageSnapshot();
+  const volume = readDisk();
+  const sumIo = (key: "diskRead" | "diskWrite" | "diskReadRate" | "diskWriteRate") => {
+    const values = processList.map((p) => p[key]).filter((v): v is number => v !== null);
+    return values.length ? values.reduce((sum, v) => sum + v, 0) : null;
+  };
   const disk = {
-    ...readDisk(),
-    trackedRead: processList.reduce(
-      (sum, process) => sum + process.diskRead,
-      0,
-    ),
-    trackedWrite: processList.reduce(
-      (sum, process) => sum + process.diskWrite,
-      0,
-    ),
-    readRate: processList.reduce(
-      (sum, process) => sum + process.diskReadRate,
-      0,
-    ),
-    writeRate: processList.reduce(
-      (sum, process) => sum + process.diskWriteRate,
-      0,
-    ),
+    ...volume,
+    ioSource,
+    physicalIoAvailable: ioSource === "physical",
+    ioDescription: ioSource === "logical"
+      ? "Application I/O counts bytes passed through read/write calls, including cached files, pipes, and sockets. Physical disk counters are unavailable on Zo."
+      : ioSource === "physical"
+        ? "Physical I/O of visible processes; totals cover currently running processes only."
+        : "I/O measurement is unavailable; zero activity cannot be inferred.",
+    inventoryBytes: storage.inventory?.bytes ?? null,
+    inventoryUpdatedAt: "updatedAt" in storage ? storage.updatedAt : null,
+    inventoryStale: storage.stale,
+    inventoryIncomplete: "incomplete" in storage ? storage.incomplete : false,
+    volumeComparable: volume.total > 0 && Boolean(storage.inventory) && volume.used >= storage.inventory!.bytes * 0.95,
+    trackedRead: sumIo("diskRead"),
+    trackedWrite: sumIo("diskWrite"),
+    readRate: sumIo("diskReadRate"),
+    writeRate: sumIo("diskWriteRate"),
   };
   const cpu = readCpu();
   const snapshot = {
@@ -993,6 +1016,9 @@ function frontendResponse(
   });
 }
 
+void storageCache.refresh();
+setInterval(() => void storageCache.refresh(), 30_000);
+
 recordBandwidth();
 setInterval(recordBandwidth, 60_000);
 
@@ -1012,6 +1038,14 @@ Bun.serve({
       return Response.json(snapshot(), {
         headers: { "cache-control": "no-store" },
       });
+    }
+    if (url.pathname === `${basePath}/api/storage/rescan` && request.method === "POST") {
+      if (request.headers.get("x-usage-action") !== "rescan" ||
+          request.headers.get("sec-fetch-site") === "cross-site") {
+        return new Response("Forbidden", { status: 403 });
+      }
+      void storageCache.refresh(true);
+      return Response.json(storageSnapshot(), { status: 202, headers: { "cache-control": "no-store" } });
     }
     if (url.pathname === `${basePath}/api/storage`) {
       return Response.json(storageSnapshot(), {
