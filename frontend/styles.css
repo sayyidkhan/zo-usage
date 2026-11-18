@@ -494,6 +494,26 @@ h2 {
   padding: 6px 10px;
   text-transform: uppercase;
 }
+.application-heading { flex-wrap: wrap; align-items: center; }
+.application-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.application-range select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.application-range select:focus-visible { outline: 2px solid #2d7052; outline-offset: 2px; }
 .detail-back:hover {
   border-color: var(--deep);
   color: var(--deep);
@@ -541,6 +561,29 @@ th {
   text-transform: uppercase;
   padding: 0 0 10px;
 }
+.table-sort,
+#storage-panel .table-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 0;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+.table-sort:hover,
+th[aria-sort="ascending"],
+th[aria-sort="descending"] { color: var(--ink); }
+.table-sort:focus-visible { outline: 2px solid #2d7052; outline-offset: 3px; }
+.sort-indicator { opacity: .45; min-width: 1ch; }
+th[aria-sort="ascending"] .sort-indicator,
+th[aria-sort="descending"] .sort-indicator { opacity: 1; color: #2d7052; }
 th:first-child {
   width: 92px;
   text-align: left;

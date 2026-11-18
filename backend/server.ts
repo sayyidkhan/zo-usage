@@ -4,6 +4,7 @@ import { basename, dirname, relative } from "node:path";
 import { Database } from "bun:sqlite";
 import { createStorageCache, directoryUsage } from "./storage";
 import { createIoTracker, probeIo } from "./io";
+import { applicationRange } from "./application-range";
 
 type Counter = { total: number; idle: number; at: number };
 type Bytes = {
@@ -546,9 +547,8 @@ async function ingestApplicationTraffic(request: Request) {
   }
 }
 
-function applicationTrafficHistory(application?: string) {
-  const now = Date.now();
-  const since = singaporeDate(now - 29 * 24 * 60 * 60 * 1000);
+function applicationTrafficHistory(application: string | undefined, range: NonNullable<ReturnType<typeof applicationRange>>) {
+  const { days, since } = range;
   const parameters = application ? [since, application] : [since];
   const filter = application ? "AND application = ?" : "";
   const daily = database
@@ -597,6 +597,8 @@ function applicationTrafficHistory(application?: string) {
   return {
     updatedAt: new Date().toISOString(),
     application: application || null,
+    days,
+    since,
     applications,
     daily,
     processes: application
@@ -1066,7 +1068,9 @@ Bun.serve({
     if (url.pathname === `${basePath}/api/application-history`) {
       const application =
         url.searchParams.get("application")?.trim() || undefined;
-      return Response.json(applicationTrafficHistory(application), {
+      const range = applicationRange(url.searchParams.get("days"));
+      if (!range) return Response.json({ error: "days must be 1, 7, 14 or 30" }, { status: 400 });
+      return Response.json(applicationTrafficHistory(application, range), {
         headers: { "cache-control": "no-store" },
       });
     }

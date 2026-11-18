@@ -23,11 +23,84 @@ const escape = (value) =>
         char
       ],
   );
+const totalTraffic = (row) => row.receivedBytes + row.sentBytes;
+const tableColumns = {
+  "cpu-processes": ["pid", "application", "name", "cpu", "memory", "disk"],
+  "memory-processes": ["pid", "application", "name", "memory", "threads", "cpu", "disk"],
+  "disk-processes": ["pid", "application", "name", "diskReadRate", "diskWriteRate", "diskRead", "diskWrite"],
+  "network-connections": ["pid", "application", "name", "protocol", "state", "local", "remote"],
+  "history-days": ["day", "receivedBytes", "sentBytes", totalTraffic, "receivedPackets", "sentPackets"],
+  "application-traffic": [(row) => row.application ?? row.day, "receivedBytes", "sentBytes", totalTraffic, "requestCount", "errorCount"],
+  "storage-locations": ["name", "bytes", "share", "contents"],
+};
+const tableSorts = new Map();
+let latestSnapshot, latestHistory, latestApplications;
+function sortedRows(id, records, defaultCompare, limit) {
+  const ordered = records.slice();
+  const sort = tableSorts.get(id);
+  if (sort) {
+    const column = tableColumns[id][sort.column];
+    const value = typeof column === "function" ? column : (row) => row[column];
+    ordered.sort((a, b) => {
+      const left = value(a), right = value(b);
+      const missingLeft = left == null || (typeof left === "number" && !Number.isFinite(left));
+      const missingRight = right == null || (typeof right === "number" && !Number.isFinite(right));
+      if (missingLeft || missingRight) return Number(missingLeft) - Number(missingRight);
+      const comparison = typeof left === "number" && typeof right === "number"
+        ? left - right : String(left).localeCompare(String(right), "en", { numeric: true, sensitivity: "base" });
+      return sort.direction === "ascending" ? comparison : -comparison;
+    });
+  } else if (defaultCompare) ordered.sort(defaultCompare);
+  return limit ? ordered.slice(0, limit) : ordered;
+}
+function updateSortHeaders(id) {
+  const table = document.getElementById(id).closest("table");
+  const sort = tableSorts.get(id);
+  table.querySelectorAll("thead th").forEach((header, column) => {
+    let button = header.querySelector(".table-sort");
+    if (!button) {
+      button = document.createElement("button");
+      button.type = "button";
+      button.className = "table-sort";
+      const label = document.createElement("span");
+      label.textContent = header.textContent;
+      const indicator = document.createElement("span");
+      indicator.className = "sort-indicator";
+      indicator.setAttribute("aria-hidden", "true");
+      button.append(label, indicator);
+      header.replaceChildren(button);
+    }
+    button.dataset.table = id;
+    button.dataset.column = column;
+    const direction = sort?.column === column ? sort.direction : "none";
+    const next = direction === "none" ? "ascending" : direction === "ascending" ? "descending" : "default";
+    header.setAttribute("aria-sort", direction);
+    button.querySelector(".sort-indicator").textContent = direction === "ascending" ? "↑" : direction === "descending" ? "↓" : "↕";
+    button.setAttribute("aria-label", button.firstChild.textContent + ": " + (direction === "none" ? "default order" : direction) + ". Click for " + next + " order.");
+    button.title = "Sort: ascending → descending → default";
+  });
+  if (id === "cpu-processes" || id === "memory-processes") {
+    const note = table.closest("article").querySelector(".section-title .note");
+    note.textContent = sort
+      ? "sorted by " + table.querySelectorAll("th")[sort.column].querySelector(".table-sort span").textContent + " · " + (sort.direction === "ascending" ? "asc" : "desc")
+      : id === "cpu-processes" ? "sorted by CPU use" : "sorted by resident memory";
+  }
+}
+document.addEventListener("click", (event) => {
+  const button = event.target.closest(".table-sort");
+  if (!button) return;
+  const id = button.dataset.table, column = Number(button.dataset.column);
+  const current = tableSorts.get(id);
+  if (current?.column === column && current.direction === "descending") tableSorts.delete(id);
+  else tableSorts.set(id, { column, direction: current?.column === column ? "descending" : "ascending" });
+  if (id === "storage-locations" && storageData) renderStorage(storageData);
+  else if (id === "history-days" && latestHistory) renderHistory(latestHistory);
+  else if (id === "application-traffic" && latestApplications) renderApplications(latestApplications);
+  else if (latestSnapshot) { render(latestSnapshot); renderDetails(latestSnapshot); }
+  updateSortHeaders(id);
+});
 function rows(processes, mode) {
-  return processes
-    .slice()
-    .sort((a, b) => (mode === "cpu" ? b.cpu - a.cpu : b.memory - a.memory))
-    .slice(0, 15)
+  return sortedRows("cpu-processes", processes, (a, b) => b.cpu - a.cpu, 15)
     .map(
       (p) =>
         '<tr><td class="pid">' +
@@ -53,10 +126,7 @@ function rows(processes, mode) {
     .join("");
 }
 function memoryRows(processes) {
-  return processes
-    .slice()
-    .sort((a, b) => b.memory - a.memory)
-    .slice(0, 20)
+  return sortedRows("memory-processes", processes, (a, b) => b.memory - a.memory, 20)
     .map(
       (p) =>
         '<tr><td class="pid">' +
@@ -84,10 +154,7 @@ function memoryRows(processes) {
     .join("");
 }
 function diskRows(processes) {
-  return processes
-    .slice()
-    .sort((a, b) => b.disk - a.disk)
-    .slice(0, 20)
+  return sortedRows("disk-processes", processes, (a, b) => b.disk - a.disk, 20)
     .map(
       (p) =>
         '<tr><td class="pid">' +
@@ -115,8 +182,7 @@ function diskRows(processes) {
     .join("");
 }
 function connectionRows(connections) {
-  return connections
-    .slice(0, 30)
+  return sortedRows("network-connections", connections, null, 30)
     .map(
       (c) =>
         '<tr><td class="pid">' +
@@ -145,7 +211,7 @@ function connectionRows(connections) {
 }
 function historyRows(days) {
   return (
-    days
+    sortedRows("history-days", days)
       .map(
         (day) =>
           '<tr><td class="history-date">' +
@@ -179,7 +245,7 @@ function trafficTotals(rows) {
 }
 function applicationRows(applications) {
   return (
-    applications
+    sortedRows("application-traffic", applications)
       .map(
         (app) =>
           '<tr><td class="application"><button class="app-drill" data-application="' +
@@ -206,7 +272,7 @@ function applicationRows(applications) {
 }
 function applicationDailyRows(days) {
   return (
-    days
+    sortedRows("application-traffic", days)
       .map(
         (day) =>
           '<tr><td class="history-date">' +
@@ -265,6 +331,9 @@ overviewToggle.addEventListener("click", () => {
 });
 let activeTab = "cpu",
   selectedApplication = "";
+const applicationRange = document.querySelector("#application-range");
+applicationRange.addEventListener("change", refreshApplications);
+let applicationRequest = 0;
 function setTab(name) {
   const tabs = [
     "cpu",
@@ -387,6 +456,8 @@ function renderDetails(data) {
   document.querySelector("#network-explanation").textContent =
     data.connections.length +
     " active sockets are attributed to their owning application. Network byte totals are interface-wide; Linux does not expose per-process socket byte counters here.";
+  updateSortHeaders("disk-processes");
+  updateSortHeaders("network-connections");
 }
 let networkPeak = 0;
 function updateSummaryMeter(id, value, description) {
@@ -405,6 +476,7 @@ function updateSummaryMeter(id, value, description) {
   track.title = description;
 }
 function render(data) {
+  latestSnapshot = data;
   const memoryPct = (data.memory.used / data.memory.total) * 100,
     diskPct = data.disk.inventoryBytes !== null && data.disk.total > 0
       ? (data.disk.inventoryBytes / data.disk.total) * 100 : null,
@@ -468,6 +540,8 @@ function render(data) {
   document.querySelector("#memory-processes").innerHTML = memoryRows(
     data.processes,
   );
+  updateSortHeaders("cpu-processes");
+  updateSortHeaders("memory-processes");
   document.querySelector("#updated").textContent =
     "Updated " + new Date(data.updatedAt).toLocaleTimeString("en-SG", { timeZone: "Asia/Singapore" }) + " SGT";
   document.querySelector("#memory-pressure").textContent = pressure.label;
@@ -523,6 +597,7 @@ function render(data) {
     : "No process data available.";
 }
 function renderHistory(data) {
+  latestHistory = data;
   const todayTotal = data.today.receivedBytes + data.today.sentBytes,
     monthTotal = data.month.receivedBytes + data.month.sentBytes,
     last30Total = data.last30Days.receivedBytes + data.last30Days.sentBytes,
@@ -538,6 +613,7 @@ function renderHistory(data) {
   document.querySelector("#history-month").textContent = bytes(monthTotal);
   document.querySelector("#history-last-30").textContent = bytes(last30Total);
   document.querySelector("#history-days").innerHTML = historyRows(data.daily);
+  updateSortHeaders("history-days");
   document.querySelector("#history-explanation").textContent =
     "Today: " +
     bytes(todayTotal) +
@@ -579,7 +655,12 @@ function storageRows(locations, inventoryBytes) {
   const expandedPaths = query ? storageSearchExpanded : storageExpanded;
   const ordered = [];
   function visit(parent, depth) {
-    const siblings = (children.get(parent) || []).slice().sort(
+    const siblings = sortedRows("storage-locations", (children.get(parent) || []).map((location) => ({
+      ...location,
+      share: location.bytes / (byPath.get(parent)?.bytes || inventoryBytes || 1),
+      contents: location.description || ((children.get(location.path) || []).length
+        ? children.get(location.path).length + " subfolders shown" : "Contents included in size"),
+    })),
       (a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name),
     );
     for (const location of siblings) {
@@ -663,6 +744,7 @@ document.querySelector("#storage-rescan").addEventListener("click", async () => 
   }
 });
 function renderStorage(data) {
+  updateSortHeaders("storage-locations");
   storageData = data;
   const rescan = document.querySelector("#storage-rescan");
   rescan.disabled = Boolean(data.refreshing);
@@ -742,6 +824,8 @@ function renderStorage(data) {
   }
 }
 function renderApplications(data) {
+  if (Boolean(latestApplications?.application) !== Boolean(data.application)) tableSorts.delete("application-traffic");
+  latestApplications = data;
   const selected = Boolean(data.application),
     totals = trafficTotals(selected ? data.daily : data.applications),
     live =
@@ -755,9 +839,10 @@ function renderApplications(data) {
   document.querySelector("#applications-title").textContent = selected
     ? data.application
     : "Application traffic";
-  document.querySelector("#applications-note").textContent = selected
-    ? "daily routed traffic and live details"
-    : "routed HTTP traffic, last 30 days";
+  const period = data.days === 1 ? "today" : "last " + data.days + " days";
+  document.querySelector("#applications-note").textContent =
+    (selected ? "daily routed traffic, " : "routed HTTP traffic, ") + period + " (SGT)";
+  applicationRange.value = String(data.days);
   document.querySelector("#application-back").hidden = !selected;
   document.querySelector("#application-summary-one-label").textContent =
     selected ? "Live now" : "Applications";
@@ -772,12 +857,18 @@ function renderApplications(data) {
   );
   document.querySelector("#application-summary-requests").textContent =
     totals.requestCount.toLocaleString();
-  document.querySelector("#application-table-head").innerHTML = selected
+  const applicationHead = document.querySelector("#application-table-head");
+  const schema = selected ? "daily" : "applications";
+  if (applicationHead.dataset.schema !== schema) {
+    applicationHead.dataset.schema = schema;
+    applicationHead.innerHTML = selected
     ? "<tr><th>Date</th><th>Received</th><th>Sent</th><th>Total traffic</th><th>Requests</th><th>Errors</th></tr>"
     : "<tr><th>Application</th><th>Received</th><th>Sent</th><th>Total traffic</th><th>Requests</th><th>Errors</th></tr>";
+  }
   document.querySelector("#application-traffic").innerHTML = selected
     ? applicationDailyRows(data.daily)
     : applicationRows(data.applications);
+  updateSortHeaders("application-traffic");
   document.querySelector("#applications-explanation").textContent = selected
     ? "Live detail: " +
       live +
@@ -785,18 +876,28 @@ function renderApplications(data) {
     : "Select an application to inspect its retained traffic alongside its live processes and connections. Traffic is aggregated once per minute; URLs, IP addresses, and request logs are not retained.";
 }
 async function refreshApplications() {
+  const request = ++applicationRequest;
+  const table = document.querySelector("#application-table");
+  table.setAttribute("aria-busy", "true");
+  document.querySelector("#applications-explanation").textContent = "Loading application traffic…";
   try {
-    const query = selectedApplication
-      ? "?application=" + encodeURIComponent(selectedApplication)
-      : "";
-    const response = await fetch(base + "/api/application-history" + query, {
+    const query = new URLSearchParams({ days: applicationRange.value });
+    if (selectedApplication) query.set("application", selectedApplication);
+    const response = await fetch(base + "/api/application-history?" + query, {
       cache: "no-store",
+      headers: { Accept: "application/json" },
     });
     if (!response.ok) throw new Error();
-    renderApplications(await response.json());
+    const data = await response.json();
+    if (request === applicationRequest) renderApplications(data);
   } catch {
-    document.querySelector("#applications-explanation").textContent =
-      "Unable to read application traffic history.";
+    if (request === applicationRequest) {
+      applicationRange.value = String(latestApplications?.days ?? 30);
+      document.querySelector("#applications-explanation").textContent =
+        "Unable to refresh application traffic. Showing the previous result; try choosing the period again.";
+    }
+  } finally {
+    if (request === applicationRequest) table.setAttribute("aria-busy", "false");
   }
 }
 let storageRequestPending = false;
@@ -840,6 +941,7 @@ async function refresh() {
       "Unable to read host metrics";
   }
 }
+for (const id of Object.keys(tableColumns)) updateSortHeaders(id);
 refresh();
 setInterval(refresh, 5000);
 setInterval(() => { if (activeTab === "storage") refreshStorage(); }, 5000);

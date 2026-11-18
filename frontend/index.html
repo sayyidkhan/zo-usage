@@ -534,13 +534,22 @@
               ><strong id="application-summary-requests">--</strong>
             </div>
           </section>
-          <div class="section-title">
+          <div class="section-title application-heading">
             <h2 id="applications-title">Application traffic</h2>
             <button class="detail-back" id="application-back" hidden>
               All applications</button
             ><span class="note" id="applications-note"
               >routed HTTP traffic, last 30 days</span
             >
+            <label class="application-range">
+              Period
+              <select id="application-range" title="Singapore calendar days, including today. 1 month = 30 days.">
+                <option value="1">1 day</option>
+                <option value="7">7 days</option>
+                <option value="14">2 weeks</option>
+                <option value="30" selected>1 month</option>
+              </select>
+            </label>
           </div>
           <p class="consumer-note" id="applications-explanation">
             Loading application traffic...
