@@ -18,7 +18,7 @@ export async function directoryUsage(paths: string[], timeoutMs = 120_000, disco
     }),
   );
   const child = Bun.spawn(
-    ["/usr/bin/du", "-x", "-B1", "--null", "--max-depth=" + depth, "--", ...roots],
+    ["/usr/bin/du", "-B1", "--null", "--max-depth=" + depth, "--", ...roots],
     { stdout: "pipe", stderr: "ignore" },
   );
   let timedOut = false;

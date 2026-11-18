@@ -721,7 +721,7 @@ async function storageInventory() {
   return {
     updatedAt: new Date().toISOString(),
     scanIntervalMinutes: storageCacheMs / 60_000,
-    inventoryVersion: 4,
+    inventoryVersion: 5,
     discoveryDepth: 4,
     incomplete,
     inventory: { bytes: inventoriedBytes, categories, locations },
@@ -742,7 +742,7 @@ const storageCache = createStorageCache(storageInventory, {
       "SELECT payload FROM storage_inventory_cache WHERE id = 1",
     ).get() as { payload: string } | null;
     const saved = row ? JSON.parse(row.payload) : undefined;
-    return saved?.inventoryVersion === 4 ? saved : undefined;
+    return saved?.inventoryVersion === 5 ? saved : undefined;
   },
   save(value) {
     database.query(

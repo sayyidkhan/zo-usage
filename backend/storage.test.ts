@@ -82,7 +82,7 @@ test("nested locations come from one traversal without losing child totals", asy
     expect(sizes.get(leaf)).toBeGreaterThan(0);
     expect(sizes.get(root)).toBeGreaterThanOrEqual(sizes.get(nested)!);
     expect(sizes.get(nested)).toBeGreaterThanOrEqual(sizes.get(leaf)!);
-    const expected = Bun.spawnSync(["du", "-sx", "-B1", root]);
+    const expected = Bun.spawnSync(["du", "-s", "-B1", root]);
     expect(sizes.get(root)).toBe(Number(new TextDecoder().decode(expected.stdout).split("\t")[0]));
     const empty = await directoryUsage([join(root, "missing")]);
     expect(empty.sizes.size).toBe(0);

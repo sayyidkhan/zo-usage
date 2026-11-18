@@ -14,12 +14,15 @@
   <body>
     <main>
       <header>
-        <div>
-          <div class="eyebrow">Zo host observability</div>
+        <div class="header-title">
           <h1>Usage</h1>
+          <div class="eyebrow">Zo host observability</div>
         </div>
         <div class="header-actions">
-          <button type="button" id="overview-toggle" aria-expanded="true" aria-controls="host-overview">Hide overview</button>
+          <button type="button" id="overview-toggle" aria-expanded="true" aria-controls="host-overview">
+            <svg class="overview-toggle-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 15 6-6 6 6" /></svg>
+            <span id="overview-toggle-label">Hide overview</span>
+          </button>
           <div class="fresh">
             <b></b>Live data<br /><span id="updated">Connecting...</span>
           </div>
@@ -27,13 +30,13 @@
       </header>
       <section class="summary" id="host-overview" aria-label="Host overview">
         <article class="card">
-          <div class="label">CPU now</div>
+          <div class="label">CPU</div>
           <div class="stat" id="cpu">--</div>
           <div class="detail" id="cpu-detail">Across all cores</div>
           <div class="meter"><i id="cpu-meter"></i></div>
         </article>
         <article class="card">
-          <div class="label">Memory in use</div>
+          <div class="label">Memory</div>
           <div class="stat" id="memory">--</div>
           <div class="detail" id="memory-detail">Reading host memory</div>
           <div class="meter"><i id="memory-meter"></i></div>
@@ -45,7 +48,7 @@
           <div class="meter"><i id="disk-meter"></i></div>
         </article>
         <article class="card">
-          <div class="label">Network traffic</div>
+          <div class="label">Network</div>
           <div class="stat" id="network">--</div>
           <div class="detail" id="network-detail">Measuring current rate</div>
           <div class="meter"><i id="network-meter" style="width: 0"></i></div>
@@ -357,10 +360,12 @@
           aria-labelledby="storage-tab"
           hidden
         >
-          <section class="storage-summary" aria-label="Storage summary">
-            <div><div class="storage-total-line"><span class="label">Scanned storage</span><strong id="storage-inventory-total">Scanning…</strong></div>
-            <p id="storage-inventory-detail" role="status" aria-live="polite">Waiting for a completed scan</p></div>
+          <section class="storage-toolbar" aria-label="Storage controls">
+            <div class="storage-search-group">
+              <label for="storage-search">Find folder</label><input id="storage-search" type="search" placeholder="PAL, Kingdom, a folder path…" autocomplete="off">
+            </div>
             <div class="storage-actions">
+              <button type="button" id="storage-collapse">Collapse all</button>
               <button type="button" id="storage-included" aria-haspopup="dialog" aria-controls="storage-coverage">What is included?</button>
               <button type="button" id="storage-rescan">Rescan now</button>
             </div>
@@ -375,6 +380,8 @@
             <p>Storage is rescanned every five minutes. New, renamed and deleted folders appear after a completed scan; this is not a live file feed. Volume counters below may be virtualised by Zo.</p>
             <p>Expand a folder to see inside. Each size includes all its contents; child sizes are already included. Percentages show share of the parent.</p>
             <section class="storage-overview" aria-label="Storage categories">
+              <p><span class="label">Scanned storage in use</span> <strong id="storage-inventory-total">Scanning…</strong></p>
+              <p id="storage-inventory-detail" role="status" aria-live="polite">Waiting for a completed scan</p>
               <div class="storage-bar" id="storage-bar" aria-label="Storage category breakdown"></div>
               <div class="storage-legend" id="storage-legend"></div>
             </section>
@@ -408,10 +415,6 @@
           </section>
           </dialog>
           <p class="consumer-note" id="storage-explanation" hidden></p>
-          <div class="storage-toolbar">
-            <label for="storage-search">Find folder</label><input id="storage-search" type="search" placeholder="PAL, Kingdom, a folder path…" autocomplete="off">
-            <button type="button" id="storage-collapse">Collapse all</button>
-          </div>
           <div class="table-scroll">
             <table>
               <thead>

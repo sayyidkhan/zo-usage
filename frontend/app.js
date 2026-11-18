@@ -250,7 +250,7 @@ function setOverviewHidden(hidden) {
   overview.hidden = hidden;
   document.body.classList.toggle("overview-hidden", hidden);
   overviewToggle.setAttribute("aria-expanded", String(!hidden));
-  overviewToggle.textContent = hidden ? "Show overview" : "Hide overview";
+  overviewToggle.querySelector("#overview-toggle-label").textContent = hidden ? "Show overview" : "Hide overview";
 }
 try {
   setOverviewHidden(localStorage.getItem(overviewPreferenceKey) === "true");
@@ -276,7 +276,6 @@ function setTab(name) {
     "history",
   ];
   activeTab = name;
-  document.body.classList.toggle("detail-active", name !== "cpu");
   document.body.classList.toggle("storage-active", name === "storage");
   for (const tab of tabs) {
     const selected = tab === name;
@@ -389,9 +388,26 @@ function renderDetails(data) {
     data.connections.length +
     " active sockets are attributed to their owning application. Network byte totals are interface-wide; Linux does not expose per-process socket byte counters here.";
 }
+let networkPeak = 0;
+function updateSummaryMeter(id, value, description) {
+  const fill = document.querySelector(id);
+  const track = fill.parentElement;
+  const available = Number.isFinite(value);
+  const bounded = available ? Math.max(0, Math.min(100, value)) : 0;
+  fill.style.width = bounded + "%";
+  track.setAttribute("role", "meter");
+  track.setAttribute("aria-label", description);
+  track.setAttribute("aria-valuemin", "0");
+  track.setAttribute("aria-valuemax", "100");
+  if (available) track.setAttribute("aria-valuenow", bounded.toFixed(1));
+  else track.removeAttribute("aria-valuenow");
+  track.setAttribute("aria-valuetext", available ? description : "Waiting for data");
+  track.title = description;
+}
 function render(data) {
   const memoryPct = (data.memory.used / data.memory.total) * 100,
-    diskPct = (data.disk.used / data.disk.total) * 100,
+    diskPct = data.disk.inventoryBytes !== null && data.disk.total > 0
+      ? (data.disk.inventoryBytes / data.disk.total) * 100 : null,
     availablePct = (data.memory.available / data.memory.total) * 100,
     cpuSamples = data.history.map((sample) => sample.cpu),
     cpuAverage =
@@ -428,15 +444,23 @@ function render(data) {
     "of " + bytes(data.memory.total) + " · " + percent(memoryPct);
   document.querySelector("#memory-meter").style.width = memoryPct + "%";
   document.querySelector("#disk").textContent = bytes(data.disk.inventoryBytes);
-  document.querySelector("#disk-detail").textContent = data.disk.inventoryUpdatedAt
-    ? "Visible locations · " + new Date(data.disk.inventoryUpdatedAt).toLocaleTimeString("en-SG", { timeZone: "Asia/Singapore" }) +
+  document.querySelector("#disk-detail").textContent = diskPct !== null
+    ? "of " + bytes(data.disk.total) + " reported · " + percent(diskPct) +
       (data.disk.inventoryStale ? " · Last scan" : "") + (data.disk.inventoryIncomplete ? " · Partial" : "")
     : "Scanning visible locations...";
-  document.querySelector("#disk-meter").style.width = data.disk.volumeComparable ? diskPct + "%" : "0%";
+  const storageDescription = diskPct !== null
+    ? bytes(data.disk.inventoryBytes) + " scanned / " + bytes(data.disk.total) + " reported capacity (" + percent(diskPct) + "). Covers configured locations, including mounted storage; this is not whole-disk usage. Last scan: " + new Date(data.disk.inventoryUpdatedAt).toLocaleString("en-SG", { timeZone: "Asia/Singapore" }) + " SGT."
+    : "Waiting for storage scan and reported capacity";
+  document.querySelector("#disk-detail").title = storageDescription;
+  updateSummaryMeter("#disk-meter", diskPct, storageDescription);
   document.querySelector("#network").textContent =
     bytes(data.network.down) + "/s";
+  const networkActivity = Math.max(0, data.network.down + data.network.up);
+  networkPeak = Math.max(networkPeak, networkActivity);
   document.querySelector("#network-detail").textContent =
-    "down · " + bytes(data.network.up) + " up";
+    "down · " + rate(data.network.up) + " up · peak " + rate(networkPeak);
+  updateSummaryMeter("#network-meter", networkPeak > 0 ? networkActivity / networkPeak * 100 : 0,
+    "Download + upload: " + rate(networkActivity) + " / " + rate(networkPeak) + " peak since opening this page. Connection speed limit is unavailable.");
   document.querySelector("#cpu-processes").innerHTML = rows(
     data.processes,
     "cpu",
