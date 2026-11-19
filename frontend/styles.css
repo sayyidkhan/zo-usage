@@ -732,7 +732,7 @@ body .summary .meter > i {
     font-size: 1.25rem;
   }
 }
-@media (max-width: 560px) {
+@media (max-width: 760px) {
   html,
   body {
     height: auto;
@@ -869,4 +869,48 @@ body.storage-active .workspace { flex:1 1 auto; min-height:0; overflow:hidden; }
   #storage-panel .storage-location { padding-left:calc(4px + var(--storage-depth,0) * 10px); }
   #storage-panel .storage-folder { gap:4px; }
   #storage-panel .storage-size { font-size:12px; white-space:nowrap; }
+}
+
+.mobile-sort { display:none; }
+@media (max-width:760px) {
+  main { padding-inline:12px; }
+  .process-card { min-height:0; padding:16px 12px; }
+  .section-title { flex-wrap:wrap; gap:4px 12px; }
+  h2 { font-size:1.65rem; }
+  .panel .consumer-note { white-space:normal !important; overflow:visible; font-size:12px; }
+  .activity-accounting { display:block; height:auto; }
+  .pressure-panel { padding:12px; }
+  .pressure-title, .pressure-detail { font-size:11px; }
+  .pressure-state strong { font-size:1.35rem; }
+  .accounting-grid { grid-template-columns:repeat(2,minmax(0,1fr)); overflow:visible; }
+  .accounting-item { padding:10px 12px; border-top:1px solid var(--line); border-left:0; }
+  .accounting-item:nth-child(even) { border-left:1px solid var(--line); }
+  .accounting-item dt { font-size:10px; white-space:normal; overflow:visible; }
+  .accounting-item dd { font-size:1.2rem; white-space:normal; overflow-wrap:anywhere; }
+  .history-summary span { white-space:normal; line-height:1.5; }
+  .history-summary strong { font-size:1.35rem; }
+  .mobile-sort { display:flex; align-items:center; gap:10px; margin:8px 0 14px; color:var(--muted); font-size:12px; flex-shrink:0; }
+  .mobile-sort select { min-width:0; flex:1; min-height:44px; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--ink); font:inherit; font-size:16px; }
+  .mobile-sort select:focus-visible { outline:2px solid #2d7052; outline-offset:2px; }
+  .table-scroll { flex:none; min-height:0; overflow:visible; }
+  .panel table { min-width:0; width:100%; display:block; }
+  .panel thead { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); }
+  .panel tbody { display:block; }
+  .panel tbody tr { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); margin-bottom:12px; border:1px solid var(--line); border-radius:10px; padding:12px; gap:12px; }
+  .panel tbody td { display:block; width:auto; min-width:0; max-width:none; padding:0; border:0; text-align:left; white-space:normal; overflow:visible; overflow-wrap:anywhere; font-size:14px; }
+  .panel tbody td::before { content:attr(data-label); display:block; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; font-size:11px; font-weight:600; margin-bottom:4px; }
+  .panel tbody .application { grid-column:1 / -1; order:-2; }
+  .panel tbody .application::before { display:none; }
+  .panel tbody .application strong { font-size:15px; }
+  .panel tbody .application strong, .panel tbody .application span { white-space:normal; overflow-wrap:anywhere; }
+  .panel tbody .process { grid-column:1 / -1; order:-1; color:var(--muted); }
+  .panel tbody .process::before { display:inline; margin-right:8px; }
+  .panel tbody .empty-row { grid-column:1 / -1; }
+  #storage-panel .storage-location { grid-column:1 / -1; }
+  #storage-panel .storage-location::before { display:none; }
+  #storage-panel td:nth-child(n+3) { display:block; }
+  #storage-panel .storage-description { grid-column:1 / -1; }
+  #storage-panel .storage-location strong, #storage-panel .storage-location span { white-space:normal; overflow-wrap:anywhere; }
+  #storage-panel .storage-location { padding-left:calc(var(--storage-depth,0) * 8px); }
+  #storage-panel .table-scroll { min-height:100px; }
 }

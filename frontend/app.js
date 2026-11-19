@@ -79,12 +79,46 @@ function updateSortHeaders(id) {
     button.setAttribute("aria-label", button.firstChild.textContent + ": " + (direction === "none" ? "default order" : direction) + ". Click for " + next + " order.");
     button.title = "Sort: ascending → descending → default";
   });
+  const headers = [...table.querySelectorAll("thead .table-sort > span:first-child")].map((label) => label.textContent);
+  for (const row of document.getElementById(id).rows) {
+    [...row.cells].forEach((cell, column) => {
+      if (cell.colSpan === 1) cell.dataset.label = headers[column];
+    });
+  }
+  let mobileSort = table.parentElement.previousElementSibling;
+  if (!mobileSort?.classList.contains("mobile-sort")) {
+    mobileSort = document.createElement("label");
+    mobileSort.className = "mobile-sort";
+    mobileSort.append("Sort rows ");
+    const select = document.createElement("select");
+    select.dataset.table = id;
+    mobileSort.append(select);
+    table.parentElement.before(mobileSort);
+  }
+  const select = mobileSort.querySelector("select");
+  const schema = JSON.stringify(headers);
+  if (select.dataset.schema !== schema) {
+    select.dataset.schema = schema;
+    select.replaceChildren(new Option("Default order", "default"));
+    headers.forEach((label, column) => {
+      select.add(new Option(label + " ↑ ascending", column + ":ascending"));
+      select.add(new Option(label + " ↓ descending", column + ":descending"));
+    });
+  }
+  select.value = sort ? sort.column + ":" + sort.direction : "default";
   if (id === "cpu-processes" || id === "memory-processes") {
     const note = table.closest("article").querySelector(".section-title .note");
     note.textContent = sort
       ? "sorted by " + table.querySelectorAll("th")[sort.column].querySelector(".table-sort span").textContent + " · " + (sort.direction === "ascending" ? "asc" : "desc")
       : id === "cpu-processes" ? "sorted by CPU use" : "sorted by resident memory";
   }
+}
+function refreshSortedTable(id) {
+  if (id === "storage-locations" && storageData) renderStorage(storageData);
+  else if (id === "history-days" && latestHistory) renderHistory(latestHistory);
+  else if (id === "application-traffic" && latestApplications) renderApplications(latestApplications);
+  else if (latestSnapshot) { render(latestSnapshot); renderDetails(latestSnapshot); }
+  updateSortHeaders(id);
 }
 document.addEventListener("click", (event) => {
   const button = event.target.closest(".table-sort");
@@ -93,11 +127,18 @@ document.addEventListener("click", (event) => {
   const current = tableSorts.get(id);
   if (current?.column === column && current.direction === "descending") tableSorts.delete(id);
   else tableSorts.set(id, { column, direction: current?.column === column ? "descending" : "ascending" });
-  if (id === "storage-locations" && storageData) renderStorage(storageData);
-  else if (id === "history-days" && latestHistory) renderHistory(latestHistory);
-  else if (id === "application-traffic" && latestApplications) renderApplications(latestApplications);
-  else if (latestSnapshot) { render(latestSnapshot); renderDetails(latestSnapshot); }
-  updateSortHeaders(id);
+  refreshSortedTable(id);
+});
+document.addEventListener("change", (event) => {
+  const select = event.target.closest(".mobile-sort select");
+  if (!select) return;
+  const id = select.dataset.table;
+  if (select.value === "default") tableSorts.delete(id);
+  else {
+    const [column, direction] = select.value.split(":");
+    tableSorts.set(id, { column: Number(column), direction });
+  }
+  refreshSortedTable(id);
 });
 function rows(processes, mode) {
   return sortedRows("cpu-processes", processes, (a, b) => b.cpu - a.cpu, 15)
